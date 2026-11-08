@@ -8,8 +8,9 @@ How we build a quick, free, synced-across-devices web app for the family (to-do 
 
 ## 0. One-time setup (already done, nothing to redo)
 
-- GitHub Desktop installed, linked to the `servicemac74` GitHub account.
-- Firebase project `mcdonald-dashboard-01` exists, with Realtime Database security rules already open for `sessions/`, `users/`, and `budget/` (Firebase Console → Realtime Database → Rules). Any path under `sessions/` is usable by a new app with no rules change.
+- GitHub Desktop installed, linked to the `servicemac74` GitHub account. Git's own credential manager (shared with Desktop) also lets a plain `git push` from a terminal work without extra sign-in.
+- The Firebase CLI (`firebase-tools`) is installed and logged in as the account that owns all these projects — this is what makes nearly everything in §E below scriptable instead of console-clicking.
+- Firebase project `mcdonald-dashboard-01` exists, with Realtime Database security rules already open for `sessions/`, `users/`, and `budget/` (Firebase Console → Realtime Database → Rules, or `firebase deploy --only database`). Any path under `sessions/` is usable by a new app with no rules change — this is the *shared* project (§D).
 
 ---
 
@@ -48,20 +49,20 @@ How we build a quick, free, synced-across-devices web app for the family (to-do 
 - Just make sure the app's `_ref` path is `sessions/<unique-app-name>` so it can't collide with another app's data.
 - Test by opening the Pages URL in two browser profiles (or two devices) and confirming an edit on one shows up on the other within a second or two.
 
-### E. Firebase — a separate project instead (only when an app needs full isolation)
+### E. Firebase — a separate project instead (full isolation — this is what `ignite-trip-app` now uses)
 
-Use this if a future app shouldn't share billing/quota or security rules with `mcdonald-dashboard-01` — for example something outside the family, or with different access needs.
+Use this if an app shouldn't share billing/quota or security rules with `mcdonald-dashboard-01` — e.g. anything that isn't the core MCD/Redhelm tracker, so an experiment or a trip-scoped app can never touch that data. Done once already for `ignite-trip-app` (2026-11-08), moved off the shared project it originally launched on.
 
-1. console.firebase.google.com → Add project → name it (Analytics optional, can decline).
-2. Build → Realtime Database → Create Database → choose a location → start in locked mode.
-3. Project settings (gear icon) → General → "Your apps" → Add app → Web (`</>`) → register (no Firebase Hosting needed, we use GitHub Pages).
-4. Copy the generated `firebaseConfig` object into the new app's FB module, replacing the whole `_config` block.
-5. Realtime Database → Rules tab → open the paths this app needs, same pattern as the existing rules:
-   ```json
-   { "rules": { "<path>": { ".read": true, ".write": true } } }
-   ```
-   → Publish.
-6. This project now scales/bills independently of `mcdonald-dashboard-01`.
+**Mostly scriptable from a terminal, with one step that needs a real human at a keyboard** (see step 2):
+
+1. `firebase projects:create <project-id>` — or use an existing empty project if you already made one (console.firebase.google.com → Add project also works, Analytics optional/decline).
+2. **The only interactive step:** in the app's local folder, run `firebase init database` (after a `.firebaserc` with `{"projects":{"default":"<project-id>"}}` exists, or let the wizard set one). It asks 2–3 questions, including a **region picked from an arrow-key list with no default** — that specific prompt can't be answered by piping text into it (Claude can start the command in the Terminal panel, but you have to answer that one prompt yourself; everything after this step can go back to being hands-off). This step only exists because it's the project's *very first* Realtime Database instance — `firebase database:instances:create` refuses to run until one exists.
+3. `firebase deploy --only database --project <project-id>` — pushes whatever `database.rules.json` says (same `sessions/` open-read-write pattern as the shared project; copy it from `ignite-trip-app`'s `database.rules.json`).
+4. `firebase apps:create WEB "<Display Name>" --project <project-id>` — registers a web app and prints an App ID.
+5. `firebase apps:sdkconfig WEB <App ID> --project <project-id>` — prints the full `firebaseConfig` object (apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId, databaseURL). Paste it over the whole `_config` block in the new app's FB module.
+6. Commit and push — GitHub Pages redeploys automatically (§C.5).
+
+This project now scales/bills independently of `mcdonald-dashboard-01`, with its own security rules.
 
 ---
 
@@ -82,12 +83,19 @@ Use this if a future app shouldn't share billing/quota or security rules with `m
 
 ---
 
-## 4. Known app slugs in use under `mcdonald-dashboard-01` → `sessions/`
+## 4. Known app slugs and projects
+
+**Shared project `mcdonald-dashboard-01` → `sessions/`:**
 
 | Slug | App |
 |---|---|
 | `mcd` | MCD Dashboard (weekly SharePoint tracker board) |
 | `redhelm` | Redhelm Dashboard (same, Redhelm tracker) |
-| `ignite-trip` | This app — Ignite 2026 trip checklist + day planner |
 
-Add a row here whenever a new app is built from this template, so the slug is never reused by accident.
+**Dedicated (isolated) Firebase projects:**
+
+| App | Firebase project | Path |
+|---|---|---|
+| `ignite-trip-app` (this app) | `ignite-trip-app` | `sessions/ignite-trip` |
+
+Add a row to whichever table applies whenever a new app is built from this template, so a slug or project is never reused by accident.
