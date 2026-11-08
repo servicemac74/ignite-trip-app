@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Ignite Trip 2026</title>
+<style>
+  :root{
+    --bg:#f6f5f2; --paper:#ffffff; --ink:#1f2420; --muted:#767f76;
+    --line:#e2e0da; --accent:#2f6b4f; --accent-ink:#ffffff;
+    --warn:#b4452f; --am:#c98a2c; --ok:#2f6b4f; --chip:#eef0ea;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding-bottom:40px;
+  }
+  header{
+    position:sticky; top:0; z-index:5; background:var(--paper);
+    border-bottom:1px solid var(--line); padding:14px 16px 10px;
+  }
+  h1{margin:0 0 2px; font-size:19px;}
+  .sub{color:var(--muted); font-size:12px;}
+  .sync{
+    display:inline-flex; align-items:center; gap:6px; font-size:11px;
+    color:var(--muted); margin-top:6px;
+  }
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--warn);}
+  .sync[data-state="synced"] .dot{background:var(--ok);}
+  .sync[data-state="syncing"] .dot{background:var(--am);}
+  .sync[data-state="offline"] .dot{background:var(--warn);}
+
+  nav.tabs{
+    display:flex; gap:0; border-bottom:1px solid var(--line); background:var(--paper);
+    position:sticky; top:58px; z-index:4;
+  }
+  nav.tabs button{
+    flex:1; border:none; background:none; padding:12px 8px; font-size:14px;
+    font-weight:600; color:var(--muted); border-bottom:2px solid transparent;
+    cursor:pointer;
+  }
+  nav.tabs button.on{color:var(--accent); border-bottom-color:var(--accent);}
+
+  main{max-width:640px; margin:0 auto; padding:14px 12px;}
+  .view{display:none;}
+  .view.on{display:block;}
+
+  .cat{
+    background:var(--paper); border:1px solid var(--line); border-radius:10px;
+    margin-bottom:14px; overflow:hidden;
+  }
+  .cat h2{
+    margin:0; padding:10px 14px; font-size:13px; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--muted); background:var(--chip);
+    border-bottom:1px solid var(--line);
+  }
+  .item{
+    display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
+    align-items:flex-start;
+  }
+  .item:last-of-type{border-bottom:none;}
+  .item input[type=checkbox]{
+    width:20px; height:20px; margin-top:2px; flex:none; accent-color:var(--accent);
+  }
+  .item-body{flex:1; min-width:0;}
+  .item-text{
+    font-size:14.5px; outline:none; word-break:break-word;
+  }
+  .item.done .item-text{color:var(--muted); text-decoration:line-through;}
+  .meta-row{display:flex; flex-wrap:wrap; gap:6px; margin-top:5px;}
+  .chip{
+    font-size:11px; background:var(--chip); color:var(--muted); border-radius:20px;
+    padding:2px 8px; outline:none;
+  }
+  .chip.due{cursor:default;}
+  .chip.overdue{background:#fbe3dd; color:var(--warn);}
+  .chip.soon{background:#faecd2; color:var(--am);}
+  .del{
+    flex:none; border:none; background:none; color:var(--muted); font-size:16px;
+    cursor:pointer; padding:2px 4px; line-height:1;
+  }
+  .add-row{
+    display:flex; gap:8px; padding:10px 14px; background:var(--bg);
+  }
+  .add-row input{
+    flex:1; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+    font-size:14px; min-width:0;
+  }
+  .add-row button{
+    flex:none; border:none; background:var(--accent); color:var(--accent-ink);
+    border-radius:8px; padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+
+  .day{
+    background:var(--paper); border:1px solid var(--line); border-radius:10px;
+    margin-bottom:14px; overflow:hidden;
+  }
+  .day h2{
+    margin:0; padding:10px 14px; font-size:14px; background:var(--chip);
+    border-bottom:1px solid var(--line); display:flex; justify-content:space-between;
+  }
+  .day h2 .tag{font-size:11px; color:var(--muted); font-weight:400;}
+  .entry{
+    padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px;
+  }
+  .entry:last-of-type{border-bottom:none;}
+  .entry-time{
+    flex:none; width:68px; font-size:12px; color:var(--muted); outline:none; padding-top:2px;
+  }
+  .entry-body{flex:1; min-width:0;}
+  .entry-title{font-size:14.5px; font-weight:600; outline:none; word-break:break-word;}
+  .entry-notes{font-size:13px; color:var(--muted); outline:none; margin-top:3px; word-break:break-word;}
+  .owner{
+    display:inline-block; font-size:10.5px; font-weight:700; padding:1px 7px;
+    border-radius:20px; background:var(--chip); color:var(--accent); margin-top:4px;
+  }
+  select.owner-select{
+    font-size:10.5px; border:1px solid var(--line); border-radius:20px; padding:1px 6px;
+    margin-top:4px; color:var(--accent); background:var(--chip);
+  }
+  .empty-day{padding:14px; color:var(--muted); font-size:13px; font-style:italic;}
+
+  .edit-icon{color:var(--muted); font-size:11px;}
+  [contenteditable="true"]:focus{background:#fffce0; border-radius:4px;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ignite Trip 2026</h1>
+  <div class="sub">San Francisco · Mon Nov 16 – Sun Nov 22</div>
+  <div class="sync" id="syncBadge" data-state="offline">
+    <span class="dot"></span><span id="syncLabel">offline</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button id="tab-checklist" class="on" onclick="setTab('checklist')">Prep Checklist</button>
+  <button id="tab-days" onclick="setTab('days')">Trip Days</button>
+</nav>
+
+<main>
+  <div id="view-checklist" class="view on"></div>
+  <div id="view-days" class="view"></div>
+</main>
+
+<!-- Firebase SDK (compat) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+// ============================================================================
+// DATA MODEL
+// STATE = { checklist: [ {id,category,text,owner,priority,due,done} ],
+//           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ] }
+// ============================================================================
+
+var CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordination"];
+var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
+var OWNERS_DAY = ["Chris","Inez","Both"];
+
+var _counter = 0;
+function uid(prefix){ return prefix + "-" + (++_counter) + "-" + Date.now(); }
+
+function defaultState(){
+  return {
+    checklist: [
+      {id:uid("ck"), category:"Pack", text:"Build packing list (Ignite/conference + personal)", owner:"Chris", priority:"Medium", due:"2026-11-12", done:false},
+      {id:uid("ck"), category:"Pack", text:"Pack bags (both travelers)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
+      {id:uid("ck"), category:"Clean house", text:"Deep clean before departure (house ready for Sally/Bill + kids)", owner:"Chris", priority:"Medium", due:"2026-11-14", done:false},
+      {id:uid("ck"), category:"Groceries", text:"Plan meals for the kids for 11/16–11/22", owner:"Chris/Inez", priority:"Medium", due:"2026-11-12", done:false},
+      {id:uid("ck"), category:"Groceries", text:"Grocery shop for the week (stock for 4 kids + Sally/Bill)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
+      {id:uid("ck"), category:"Bus / school coordination", text:"Notify the school bus driver that grandparents will be picking up/dropping off", owner:"Chris/Inez", priority:"High", due:"2026-11-14", done:false},
+      {id:uid("ck"), category:"Bus / school coordination", text:"Make a printout with photos of Sally & Bill for the bus driver", owner:"Chris/Inez", priority:"Medium", due:"2026-11-14", done:false}
+    ],
+    days: [
+      {date:"2026-11-16", label:"Mon 11/16 — Travel day", entries:[
+        {id:uid("en"), time:"5:58 PM ET", title:"Depart ATL", owner:"Both", notes:"Arrive SFO 8:40 PM PT"}
+      ]},
+      {date:"2026-11-17", label:"Tue 11/17", entries:[]},
+      {date:"2026-11-18", label:"Wed 11/18", entries:[]},
+      {date:"2026-11-19", label:"Thu 11/19", entries:[]},
+      {date:"2026-11-20", label:"Fri 11/20", entries:[]},
+      {date:"2026-11-21", label:"Sat 11/21 — Travel day", entries:[
+        {id:uid("en"), time:"9:42 PM PT", title:"Depart SFO", owner:"Both", notes:"Arrives ATL 5:16 AM ET the next morning"}
+      ]},
+      {date:"2026-11-22", label:"Sun 11/22 — Arrival", entries:[
+        {id:uid("en"), time:"5:16 AM ET", title:"Arrive ATL", owner:"Both", notes:""}
+      ]}
+    ]
+  };
+}
+
+var STATE = null;
+var LS_KEY = "ignite-trip-2026-v1";
+
+function loadLocal(){
+  try{
+    var raw = localStorage.getItem(LS_KEY);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return null;
+}
+function saveLocal(){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(STATE)); }catch(e){}
+}
+
+STATE = loadLocal() || defaultState();
+
+// ============================================================================
+// RENDER
+// ============================================================================
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function dueChipClass(due, done){
+  if(done || !due) return "";
+  var today = todayStr();
+  if(due < today) return "overdue";
+  var d = new Date(due+"T00:00:00"), t = new Date(today+"T00:00:00");
+  var days = Math.round((d-t)/86400000);
+  if(days <= 7) return "soon";
+  return "";
+}
+
+function renderChecklist(){
+  var html = CATEGORIES.map(function(cat){
+    var items = STATE.checklist.filter(function(i){ return i.category===cat; });
+    var rows = items.map(function(i){
+      var cls = dueChipClass(i.due, i.done);
+      return '' +
+        '<div class="item'+(i.done?' done':'')+'" data-id="'+i.id+'">' +
+          '<input type="checkbox" '+(i.done?'checked':'')+' onchange="toggleDone(\''+i.id+'\')">' +
+          '<div class="item-body">' +
+            '<div class="item-text" contenteditable="true" onblur="editChecklistField(\''+i.id+'\',\'text\',this.textContent)">'+esc(i.text)+'</div>' +
+            '<div class="meta-row">' +
+              '<select class="chip" onchange="editChecklistField(\''+i.id+'\',\'owner\',this.value)">' +
+                OWNERS_CHECKLIST.map(function(o){return '<option value="'+o+'"'+(o===i.owner?' selected':'')+'>'+o+'</option>';}).join('') +
+              '</select>' +
+              '<select class="chip" onchange="editChecklistField(\''+i.id+'\',\'priority\',this.value)">' +
+                ["Low","Medium","High"].map(function(p){return '<option value="'+p+'"'+(p===i.priority?' selected':'')+'>'+p+'</option>';}).join('') +
+              '</select>' +
+              '<input class="chip due '+cls+'" type="date" value="'+(i.due||'')+'" onchange="editChecklistField(\''+i.id+'\',\'due\',this.value)">' +
+            '</div>' +
+          '</div>' +
+          '<button class="del" onclick="deleteChecklistItem(\''+i.id+'\')" title="Delete">✕</button>' +
+        '</div>';
+    }).join('');
+    return '' +
+      '<div class="cat">' +
+        '<h2>'+esc(cat)+'</h2>' +
+        rows +
+        '<div class="add-row">' +
+          '<input type="text" placeholder="Add item…" id="new-'+slug(cat)+'" onkeydown="if(event.key===\'Enter\')addChecklistItem('+JSON.stringify(cat)+')">' +
+          '<button onclick="addChecklistItem('+JSON.stringify(cat)+')">Add</button>' +
+        '</div>' +
+      '</div>';
+  }).join('');
+  document.getElementById('view-checklist').innerHTML = html;
+}
+
+function renderDays(){
+  var html = STATE.days.map(function(d){
+    var entries = d.entries.slice().sort(function(a,b){ return (a.time||'').localeCompare(b.time||''); });
+    var rows = entries.length ? entries.map(function(e){
+      return '' +
+        '<div class="entry" data-id="'+e.id+'">' +
+          '<div class="entry-time" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'time\',this.textContent)">'+esc(e.time||'')+'</div>' +
+          '<div class="entry-body">' +
+            '<div class="entry-title" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'title\',this.textContent)">'+esc(e.title)+'</div>' +
+            '<div class="entry-notes" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'notes\',this.textContent)">'+esc(e.notes||'')+'</div>' +
+            '<select class="owner-select" onchange="editEntryField(\''+d.date+'\',\''+e.id+'\',\'owner\',this.value)">' +
+              OWNERS_DAY.map(function(o){return '<option value="'+o+'"'+(o===e.owner?' selected':'')+'>'+o+'</option>';}).join('') +
+            '</select>' +
+          '</div>' +
+          '<button class="del" onclick="deleteEntry(\''+d.date+'\',\''+e.id+'\')" title="Delete">✕</button>' +
+        '</div>';
+    }).join('') : '<div class="empty-day">Nothing planned yet.</div>';
+    return '' +
+      '<div class="day">' +
+        '<h2>'+esc(d.label)+'</h2>' +
+        rows +
+        '<div class="add-row">' +
+          '<input type="text" placeholder="Time (e.g. 10:00 AM)" style="max-width:110px" id="newtime-'+d.date+'">' +
+          '<input type="text" placeholder="Suggestion…" id="newtitle-'+d.date+'" onkeydown="if(event.key===\'Enter\')addEntry(\''+d.date+'\')">' +
+          '<button onclick="addEntry(\''+d.date+'\')">Add</button>' +
+        '</div>' +
+      '</div>';
+  }).join('');
+  document.getElementById('view-days').innerHTML = html;
+}
+
+function render(){ renderChecklist(); renderDays(); }
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-'); }
+
+// ============================================================================
+// MUTATIONS — every mutation calls persist()
+// ============================================================================
+
+function persist(){
+  saveLocal();
+  render();
+  if(typeof FB !== "undefined") FB.scheduleWrite();
+}
+
+function toggleDone(id){
+  var i = STATE.checklist.find(function(x){ return x.id===id; });
+  if(!i) return;
+  i.done = !i.done;
+  persist();
+}
+function editChecklistField(id, field, value){
+  var i = STATE.checklist.find(function(x){ return x.id===id; });
+  if(!i) return;
+  i[field] = value;
+  persist();
+}
+function deleteChecklistItem(id){
+  STATE.checklist = STATE.checklist.filter(function(x){ return x.id!==id; });
+  persist();
+}
+function addChecklistItem(category){
+  var input = document.getElementById('new-'+slug(category));
+  var text = (input.value||'').trim();
+  if(!text) return;
+  STATE.checklist.push({id:uid("ck"), category:category, text:text, owner:"Chris/Inez", priority:"Medium", due:"", done:false});
+  input.value='';
+  persist();
+}
+
+function editEntryField(date, id, field, value){
+  var d = STATE.days.find(function(x){ return x.date===date; });
+  if(!d) return;
+  var e = d.entries.find(function(x){ return x.id===id; });
+  if(!e) return;
+  e[field] = value;
+  persist();
+}
+function deleteEntry(date, id){
+  var d = STATE.days.find(function(x){ return x.date===date; });
+  if(!d) return;
+  d.entries = d.entries.filter(function(x){ return x.id!==id; });
+  persist();
+}
+function addEntry(date){
+  var d = STATE.days.find(function(x){ return x.date===date; });
+  if(!d) return;
+  var timeEl = document.getElementById('newtime-'+date);
+  var titleEl = document.getElementById('newtitle-'+date);
+  var title = (titleEl.value||'').trim();
+  if(!title) return;
+  d.entries.push({id:uid("en"), time:(timeEl.value||'').trim(), title:title, owner:"Both", notes:""});
+  timeEl.value=''; titleEl.value='';
+  persist();
+}
+
+// ============================================================================
+// TABS
+// ============================================================================
+function setTab(which){
+  document.getElementById('tab-checklist').classList.toggle('on', which==='checklist');
+  document.getElementById('tab-days').classList.toggle('on', which==='days');
+  document.getElementById('view-checklist').classList.toggle('on', which==='checklist');
+  document.getElementById('view-days').classList.toggle('on', which==='days');
+}
+
+render();
+
+// ============================================================================
+// FIREBASE SYNC MODULE
+// Reuses the mcdonald-dashboard-01 Firebase project (same one the MCD/Redhelm
+// Dashboard app uses) under the existing open "sessions/" path — no security
+// rules change needed. Path: sessions/ignite-trip (single node, whole STATE
+// stored as the value, same debounce + echo-loop-guard pattern as the
+// Dashboard app's FB module).
+// ============================================================================
+var FB = (function(){
+  var _config = {
+    apiKey:            "AIzaSyDfz3LP9wJcHMJceKh-p9ns7BurCA0TUu0",
+    authDomain:        "mcdonald-dashboard-01.firebaseapp.com",
+    projectId:         "mcdonald-dashboard-01",
+    storageBucket:     "mcdonald-dashboard-01.firebasestorage.app",
+    messagingSenderId: "599419819555",
+    appId:             "1:599419819555:web:20f52ce576f1aed6b40396",
+    databaseURL:       "https://mcdonald-dashboard-01-default-rtdb.firebaseio.com"
+  };
+
+  var _db=null, _ref=null, _writeTimer=null, _lastSavedAt=null, _initialized=false, _listenerOn=false;
+
+  function _setStatus(state,label){
+    var b=document.getElementById('syncBadge'), l=document.getElementById('syncLabel');
+    if(b) b.setAttribute('data-state', state);
+    if(l) l.textContent = label || state;
+  }
+
+  function _fbArr(val){
+    if(!val) return [];
+    if(Array.isArray(val)) return val;
+    if(typeof val === 'object'){
+      var keys = Object.keys(val);
+      if(keys.length>0 && keys.every(function(k){return /^\d+$/.test(k);})){
+        return keys.sort(function(a,b){return +a-+b;}).map(function(k){return val[k];});
+      }
+    }
+    return [];
+  }
+  function _normalize(data){
+    var checklist = _fbArr(data.checklist);
+    var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
+    return {checklist:checklist, days:days};
+  }
+
+  function _buildPayload(){
+    return {
+      kind: "ignite-trip-planner",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      checklist: STATE.checklist,
+      days: STATE.days
+    };
+  }
+
+  function _applyPayload(result){
+    if(!result) return;
+    var norm = _normalize(result);
+    if(!norm.checklist.length && !norm.days.length) return;
+    STATE = {checklist:norm.checklist, days:norm.days};
+    saveLocal();
+    render();
+  }
+
+  function _doWrite(){
+    if(!_ref) return;
+    _setStatus('syncing','syncing...');
+    var payload = _buildPayload();
+    _lastSavedAt = payload.savedAt;
+    _ref.set(payload).then(function(){ _setStatus('synced','synced'); })
+                      .catch(function(){ _setStatus('offline','offline'); });
+  }
+  function scheduleWrite(){
+    if(!_initialized) return;
+    clearTimeout(_writeTimer);
+    _writeTimer = setTimeout(_doWrite, 300);
+  }
+
+  function init(){
+    try{
+      if(typeof firebase === 'undefined' || !firebase.app){ _setStatus('offline','offline'); return; }
+      var app = firebase.apps.length ? firebase.app() : firebase.initializeApp(_config);
+      _db = firebase.database(app);
+      _ref = _db.ref('sessions/ignite-trip');
+      _initialized = true;
+      _setStatus('syncing','loading...');
+
+      _ref.once('value').then(function(snap){
+        var data = snap.val();
+        if(data && data.savedAt){
+          _lastSavedAt = data.savedAt;
+          _applyPayload(data);
+          _setStatus('synced','synced');
+        } else {
+          // nothing in Firebase yet — push our current (local/default) state as the seed
+          _doWrite();
+        }
+        if(!_listenerOn){
+          _listenerOn = true;
+          _ref.on('value', function(snap2){
+            var remote = snap2.val();
+            if(!remote || !remote.savedAt) return;
+            if(_lastSavedAt && remote.savedAt <= _lastSavedAt) return;
+            _lastSavedAt = remote.savedAt;
+            _setStatus('syncing','syncing...');
+            _applyPayload(remote);
+            _setStatus('synced','synced');
+          });
+        }
+      }).catch(function(){ _setStatus('offline','offline'); });
+    }catch(e){ _setStatus('offline','offline'); }
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    setTimeout(init, 100);
+  }
+
+  return { scheduleWrite: scheduleWrite };
+})();
+</script>
+</body>
+</html>
