@@ -371,21 +371,21 @@ render();
 
 // ============================================================================
 // FIREBASE SYNC MODULE
-// Reuses the mcdonald-dashboard-01 Firebase project (same one the MCD/Redhelm
-// Dashboard app uses) under the existing open "sessions/" path — no security
-// rules change needed. Path: sessions/ignite-trip (single node, whole STATE
-// stored as the value, same debounce + echo-loop-guard pattern as the
-// Dashboard app's FB module).
+// Uses its own dedicated Firebase project, "ignite-trip-app" (separated
+// 2026-11-08 from the shared mcdonald-dashboard-01 project so this ephemeral
+// trip app's sync layer can never touch the MCD/Redhelm Dashboard's data).
+// Path: sessions/ignite-trip (single node, whole STATE stored as the value,
+// same debounce + echo-loop-guard pattern as the Dashboard app's FB module).
 // ============================================================================
 var FB = (function(){
   var _config = {
-    apiKey:            "AIzaSyDfz3LP9wJcHMJceKh-p9ns7BurCA0TUu0",
-    authDomain:        "mcdonald-dashboard-01.firebaseapp.com",
-    projectId:         "mcdonald-dashboard-01",
-    storageBucket:     "mcdonald-dashboard-01.firebasestorage.app",
-    messagingSenderId: "599419819555",
-    appId:             "1:599419819555:web:20f52ce576f1aed6b40396",
-    databaseURL:       "https://mcdonald-dashboard-01-default-rtdb.firebaseio.com"
+    apiKey:            "AIzaSyAbz9G0_I4nHRzMkHvUqoqhjRQY83xxlDc",
+    authDomain:        "ignite-trip-app.firebaseapp.com",
+    projectId:         "ignite-trip-app",
+    storageBucket:     "ignite-trip-app.firebasestorage.app",
+    messagingSenderId: "60434395983",
+    appId:             "1:60434395983:web:67a6517333ec33b69bcb3a",
+    databaseURL:       "https://ignite-trip-app-default-rtdb.firebaseio.com"
   };
 
   var _db=null, _ref=null, _writeTimer=null, _lastSavedAt=null, _initialized=false, _listenerOn=false;

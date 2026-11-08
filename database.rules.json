@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "sessions": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
