@@ -53,13 +53,32 @@
   .cat h2{
     margin:0; padding:10px 14px; font-size:13px; text-transform:uppercase;
     letter-spacing:.04em; color:var(--muted); background:var(--chip);
-    border-bottom:1px solid var(--line); display:flex; justify-content:space-between;
-    align-items:center; gap:8px;
+    border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px;
   }
+  .cat-left{display:flex; align-items:center; gap:6px; flex:1; min-width:0;}
+  .cat-right{display:flex; align-items:center; gap:2px; flex:none;}
   .cat h2 .cat-title{flex:1; outline:none; min-width:0;}
   .cat h2 .del{color:var(--muted);}
   .node-children{
     margin-left:16px; padding-left:10px; border-left:1px solid var(--line);
+  }
+  .toggle{
+    flex:none; width:18px; height:18px; border:none; background:none; padding:0;
+    color:var(--muted); font-size:11px; cursor:pointer; line-height:18px; text-align:center;
+  }
+  .toggle-spacer{flex:none; width:18px; display:inline-block;}
+  .plus{
+    flex:none; border:none; background:none; color:var(--accent); font-size:19px;
+    font-weight:700; cursor:pointer; padding:0 6px; line-height:1;
+  }
+  .kid-count{
+    display:inline-block; font-size:10.5px; color:var(--muted); background:var(--bg);
+    border-radius:20px; padding:1px 7px; font-weight:600; flex:none;
+  }
+  .checklist-toolbar{display:flex; gap:8px; margin-bottom:10px;}
+  .toolbar-btn{
+    flex:none; border:1px solid var(--line); background:var(--paper); color:var(--ink);
+    border-radius:8px; padding:6px 12px; font-size:12.5px; cursor:pointer;
   }
   .item{
     display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
@@ -160,6 +179,42 @@
     margin-top:14px; border:none; background:var(--accent); color:var(--accent-ink);
     border-radius:8px; padding:10px 20px; font-size:14px; font-weight:600; cursor:pointer;
   }
+
+  .cal-grid{
+    display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:16px;
+  }
+  .cal-dow{
+    text-align:center; font-size:11px; color:var(--muted); font-weight:600; padding:2px 0 6px;
+  }
+  .cal-cell{
+    aspect-ratio:1; border:1px solid var(--line); border-radius:8px; background:var(--paper);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font:inherit; font-size:13px; color:var(--ink); cursor:pointer; padding:2px; margin:0;
+  }
+  .cal-cell.empty{border:none; background:none; cursor:default;}
+  .cal-cell.today{border-color:var(--accent); font-weight:700;}
+  .cal-cell.selected{background:var(--accent); color:var(--accent-ink); border-color:var(--accent);}
+  .cal-cell.selected .cal-dot{background:var(--accent-ink);}
+  .cal-dot{width:6px; height:6px; border-radius:50%; background:var(--accent); margin-top:3px;}
+  .cal-dot.overdue{background:var(--warn);}
+  .cal-agenda{
+    background:var(--paper); border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  }
+  .cal-agenda h3{
+    margin:0; padding:10px 14px; font-size:14px; background:var(--chip);
+    border-bottom:1px solid var(--line);
+  }
+  .cal-item{
+    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    border-bottom:1px solid var(--line); font-size:14px;
+  }
+  .cal-item:last-child{border-bottom:none;}
+  .cal-item.done span:not(.owner){color:var(--muted); text-decoration:line-through;}
+  .cal-item .owner{
+    margin-left:auto; flex:none; font-size:10.5px; color:var(--accent); background:var(--chip);
+    border-radius:20px; padding:1px 7px;
+  }
+  .cal-entry-time{font-size:12px; color:var(--muted); flex:none; width:68px;}
 </style>
 </head>
 <body>
@@ -176,11 +231,13 @@
 <nav class="tabs">
   <button id="tab-checklist" class="on" onclick="setTab('checklist')">Prep Checklist</button>
   <button id="tab-days" onclick="setTab('days')">Trip Days</button>
+  <button id="tab-cal" onclick="setTab('cal')">Calendar</button>
 </nav>
 
 <main>
   <div id="view-checklist" class="view on"></div>
   <div id="view-days" class="view"></div>
+  <div id="view-cal" class="view"></div>
 </main>
 
 <!-- Firebase SDK (compat) -->
@@ -317,18 +374,73 @@ function childrenOf(parentId){
   return STATE.checklist.filter(function(i){ return i.parentId===parentId; });
 }
 
+// Collapse/expand and "show the add-sub-item input" are both per-node
+// *display* state, not data — kept in memory only (never saved/synced), so
+// toggling one never triggers a Firebase write or shows up on another
+// device.
+var _collapsed = {};
+var _addOpen = {};
+
+function toggleCollapse(id){
+  _collapsed[id] = !_collapsed[id];
+  render();
+}
+function toggleAddOpen(id){
+  _addOpen[id] = !_addOpen[id];
+  if(_addOpen[id]) _collapsed[id] = false;
+  render();
+  if(_addOpen[id]){
+    var el = document.getElementById('new-child-'+id);
+    if(el) el.focus();
+  }
+}
+function collapseAll(){
+  STATE.checklist.forEach(function(n){ if(childrenOf(n.id).length) _collapsed[n.id] = true; });
+  render();
+}
+function expandAll(){
+  _collapsed = {};
+  render();
+}
+
+// Builds the "add sub-item…" row shared by every node and by each top-level
+// section, shown only once its "+" has been tapped (see _addOpen above) —
+// otherwise every single item would carry its own permanently-visible blank
+// input, which is the clutter this was built to fix.
+function addRowHtml(parentId, placeholder){
+  return '<div class="add-row">' +
+    '<input type="text" placeholder="'+esc(placeholder)+'" id="new-child-'+parentId+'" onkeydown="if(event.key===\'Enter\')addChild(\''+parentId+'\')">' +
+    '<button onclick="addChild(\''+parentId+'\')">Add</button>' +
+  '</div>';
+}
+
 // Renders one checklist node (any depth below the top level) plus its own
 // children, recursively — this is what lets "Passport" sit under "Gather
-// documents" and still have its own sub-steps underneath it.
+// documents" and still have its own sub-steps underneath it. Its children
+// (and their own "add sub-item" row) collapse behind a chevron when there's
+// too much to scan at once.
 function renderChecklistNode(node){
   var cls = dueChipClass(node.due, node.done);
   var kids = childrenOf(node.id);
+  var hasKids = kids.length>0;
+  var isCollapsed = !!_collapsed[node.id];
+  var addOpen = !!_addOpen[node.id];
+  var toggleBtn = hasKids
+    ? '<button class="toggle" onclick="toggleCollapse(\''+node.id+'\')" title="'+(isCollapsed?'Expand':'Collapse')+'">'+(isCollapsed?'▸':'▾')+'</button>'
+    : '<span class="toggle-spacer"></span>';
+  var childrenHtml = isCollapsed ? '' :
+    '<div class="node-children">' +
+      kids.map(renderChecklistNode).join('') +
+      (addOpen ? addRowHtml(node.id, 'Add sub-item…') : '') +
+    '</div>';
   return '' +
     '<div class="node" data-id="'+node.id+'">' +
       '<div class="item'+(node.done?' done':'')+'">' +
+        toggleBtn +
         '<input type="checkbox" '+(node.done?'checked':'')+' onchange="toggleDone(\''+node.id+'\')">' +
         '<div class="item-body">' +
           '<div class="item-text" contenteditable="true" onblur="editChecklistField(\''+node.id+'\',\'text\',this.textContent)">'+esc(node.text)+'</div>' +
+          (isCollapsed && hasKids ? '<span class="kid-count">'+kids.length+' sub-item'+(kids.length===1?'':'s')+'</span>' : '') +
           '<div class="meta-row">' +
             '<select class="chip" onchange="editChecklistField(\''+node.id+'\',\'owner\',this.value)">' +
               OWNERS_CHECKLIST.map(function(o){return '<option value="'+o+'"'+(o===node.owner?' selected':'')+'>'+o+'</option>';}).join('') +
@@ -339,33 +451,44 @@ function renderChecklistNode(node){
             '<input class="chip due '+cls+'" type="date" value="'+(node.due||'')+'" onchange="editChecklistField(\''+node.id+'\',\'due\',this.value)">' +
           '</div>' +
         '</div>' +
+        '<button class="plus" onclick="toggleAddOpen(\''+node.id+'\')" title="Add sub-item">+</button>' +
         '<button class="del" onclick="deleteNode(\''+node.id+'\')" title="Delete">✕</button>' +
       '</div>' +
-      '<div class="node-children">' +
-        kids.map(renderChecklistNode).join('') +
-        '<div class="add-row">' +
-          '<input type="text" placeholder="Add sub-item…" id="new-child-'+node.id+'" onkeydown="if(event.key===\'Enter\')addChild(\''+node.id+'\')">' +
-          '<button onclick="addChild(\''+node.id+'\')">Add</button>' +
-        '</div>' +
-      '</div>' +
+      childrenHtml +
     '</div>';
 }
 
 function renderChecklist(){
   var cats = childrenOf(ROOT);
-  var html = cats.map(function(cat){
+  var html = '<div class="checklist-toolbar">' +
+    '<button class="toolbar-btn" onclick="expandAll()">Expand all</button>' +
+    '<button class="toolbar-btn" onclick="collapseAll()">Collapse all</button>' +
+  '</div>';
+  html += cats.map(function(cat){
     var kids = childrenOf(cat.id);
+    var hasKids = kids.length>0;
+    var isCollapsed = !!_collapsed[cat.id];
+    var addOpen = !!_addOpen[cat.id];
+    var toggleBtn = hasKids
+      ? '<button class="toggle" onclick="toggleCollapse(\''+cat.id+'\')" title="'+(isCollapsed?'Expand':'Collapse')+'">'+(isCollapsed?'▸':'▾')+'</button>'
+      : '<span class="toggle-spacer"></span>';
+    var bodyHtml = isCollapsed ? '' :
+      kids.map(renderChecklistNode).join('') +
+      (addOpen ? addRowHtml(cat.id, 'Add item…') : '');
     return '' +
       '<div class="cat" data-id="'+cat.id+'">' +
         '<h2>' +
-          '<span class="cat-title" contenteditable="true" onblur="editChecklistField(\''+cat.id+'\',\'text\',this.textContent)">'+esc(cat.text)+'</span>' +
-          '<button class="del" onclick="deleteNode(\''+cat.id+'\')" title="Delete section">✕</button>' +
+          '<span class="cat-left">' +
+            toggleBtn +
+            '<span class="cat-title" contenteditable="true" onblur="editChecklistField(\''+cat.id+'\',\'text\',this.textContent)">'+esc(cat.text)+'</span>' +
+            (isCollapsed && hasKids ? '<span class="kid-count">'+kids.length+'</span>' : '') +
+          '</span>' +
+          '<span class="cat-right">' +
+            '<button class="plus" onclick="toggleAddOpen(\''+cat.id+'\')" title="Add item">+</button>' +
+            '<button class="del" onclick="deleteNode(\''+cat.id+'\')" title="Delete section">✕</button>' +
+          '</span>' +
         '</h2>' +
-        kids.map(renderChecklistNode).join('') +
-        '<div class="add-row">' +
-          '<input type="text" placeholder="Add item…" id="new-child-'+cat.id+'" onkeydown="if(event.key===\'Enter\')addChild(\''+cat.id+'\')">' +
-          '<button onclick="addChild(\''+cat.id+'\')">Add</button>' +
-        '</div>' +
+        bodyHtml +
       '</div>';
   }).join('');
   html += '' +
@@ -430,7 +553,92 @@ function entryTimeHtml(date, e){
     '</div>';
 }
 
-function render(){ renderChecklist(); renderDays(); }
+// ============================================================================
+// CALENDAR
+// A month grid for November 2026 (the only month this trip's dates fall
+// in — no prev/next nav, this app isn't a general-purpose calendar) plus an
+// agenda panel for whichever day is selected. Pulls from both data sources
+// that already carry real dates: checklist items with a due date, and Trip
+// Days entries — so prep deadlines and the trip itself show on one
+// timeline. Tapping a cell just selects it for the agenda below; editing
+// still happens back on the Prep Checklist / Trip Days tabs.
+// ============================================================================
+var CAL_YEAR = 2026, CAL_MONTH = 10; // November, 0-indexed
+var _selectedCalDate = null;
+var WEEKDAY_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function checklistItemsByDate(){
+  var map = {};
+  STATE.checklist.forEach(function(n){
+    if(!n.due) return;
+    (map[n.due] = map[n.due] || []).push(n);
+  });
+  return map;
+}
+function dayEntriesByDate(){
+  var map = {};
+  STATE.days.forEach(function(d){
+    if(d.entries && d.entries.length) map[d.date] = d.entries;
+  });
+  return map;
+}
+function formatCalDateLabel(dateStr){
+  var d = new Date(dateStr+'T00:00:00');
+  return d.toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'});
+}
+function selectCalDate(dateStr){
+  _selectedCalDate = dateStr;
+  renderCalendar();
+}
+
+function renderCalendar(){
+  var today = todayStr();
+  var monthStart = CAL_YEAR+'-11-01', monthEnd = CAL_YEAR+'-11-30';
+  if(!_selectedCalDate){
+    _selectedCalDate = (today>=monthStart && today<=monthEnd) ? today : monthStart;
+  }
+  var ckByDate = checklistItemsByDate();
+  var dayByDate = dayEntriesByDate();
+  var daysInMonth = new Date(CAL_YEAR, CAL_MONTH+1, 0).getDate();
+  var startWeekday = new Date(CAL_YEAR, CAL_MONTH, 1).getDay();
+
+  var cells = WEEKDAY_LABELS.map(function(w){ return '<div class="cal-dow">'+w+'</div>'; });
+  for(var i=0;i<startWeekday;i++) cells.push('<div class="cal-cell empty"></div>');
+  for(var day=1; day<=daysInMonth; day++){
+    var dateStr = CAL_YEAR+'-11-'+(day<10?'0':'')+day;
+    var total = (ckByDate[dateStr]||[]).length + (dayByDate[dateStr]||[]).length;
+    var hasOverdue = (ckByDate[dateStr]||[]).some(function(n){ return !n.done && dateStr<today; });
+    var cls = 'cal-cell' + (dateStr===today?' today':'') + (dateStr===_selectedCalDate?' selected':'');
+    cells.push(
+      '<button class="'+cls+'" onclick="selectCalDate(\''+dateStr+'\')">' +
+        '<span>'+day+'</span>' +
+        (total>0 ? '<span class="cal-dot'+(hasOverdue?' overdue':'')+'"></span>' : '') +
+      '</button>'
+    );
+  }
+  var gridHtml = '<div class="cal-grid">' + cells.join('') + '</div>';
+
+  var selCk = ckByDate[_selectedCalDate] || [];
+  var selDay = dayByDate[_selectedCalDate] || [];
+  var agendaRows = selCk.map(function(n){
+    return '<div class="cal-item'+(n.done?' done':'')+'">' +
+      '<input type="checkbox" '+(n.done?'checked':'')+' onchange="toggleDone(\''+n.id+'\')">' +
+      '<span>'+esc(n.text)+'</span>' +
+      (n.owner ? '<span class="owner">'+esc(n.owner)+'</span>' : '') +
+    '</div>';
+  }).join('') + selDay.map(function(e){
+    return '<div class="cal-item">' +
+      '<span class="cal-entry-time">'+esc(e.time||'')+'</span>' +
+      '<span>'+esc(e.title)+'</span>' +
+    '</div>';
+  }).join('');
+  if(!agendaRows) agendaRows = '<div class="empty-day">Nothing due or planned this day.</div>';
+  var agendaHtml = '<div class="cal-agenda"><h3>'+formatCalDateLabel(_selectedCalDate)+'</h3>' + agendaRows + '</div>';
+
+  document.getElementById('view-cal').innerHTML = gridHtml + agendaHtml;
+}
+
+function render(){ renderChecklist(); renderDays(); renderCalendar(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
@@ -549,10 +757,10 @@ function addEntry(date){
 // TABS
 // ============================================================================
 function setTab(which){
-  document.getElementById('tab-checklist').classList.toggle('on', which==='checklist');
-  document.getElementById('tab-days').classList.toggle('on', which==='days');
-  document.getElementById('view-checklist').classList.toggle('on', which==='checklist');
-  document.getElementById('view-days').classList.toggle('on', which==='days');
+  ['checklist','days','cal'].forEach(function(w){
+    document.getElementById('tab-'+w).classList.toggle('on', w===which);
+    document.getElementById('view-'+w).classList.toggle('on', w===which);
+  });
 }
 
 render();
