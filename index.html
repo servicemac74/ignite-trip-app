@@ -53,7 +53,13 @@
   .cat h2{
     margin:0; padding:10px 14px; font-size:13px; text-transform:uppercase;
     letter-spacing:.04em; color:var(--muted); background:var(--chip);
-    border-bottom:1px solid var(--line);
+    border-bottom:1px solid var(--line); display:flex; justify-content:space-between;
+    align-items:center; gap:8px;
+  }
+  .cat h2 .cat-title{flex:1; outline:none; min-width:0;}
+  .cat h2 .del{color:var(--muted);}
+  .node-children{
+    margin-left:16px; padding-left:10px; border-left:1px solid var(--line);
   }
   .item{
     display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
@@ -171,11 +177,20 @@
 <script>
 // ============================================================================
 // DATA MODEL
-// STATE = { checklist: [ {id,category,text,owner,priority,due,done} ],
+// STATE = { checklist: [ {id,parentId,text,owner,priority,due,done} ],
 //           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ] }
+//
+// checklist is a tree flattened into one array: a node's parentId points at
+// its parent's id. Top-level sections (what used to be the fixed "category"
+// field) are nodes whose parentId is ROOT — a string sentinel, not null,
+// because Firebase Realtime Database silently drops any key written as null,
+// which would make a top-level node indistinguishable from an orphan on the
+// next read. Any node can have children, to any depth — that's what lets
+// "Clean house" hold "Kitchen" hold "Wipe counters".
 // ============================================================================
 
-var CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordination"];
+var ROOT = "root";
+var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordination"];
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -186,15 +201,20 @@ var _counter = 0;
 function uid(prefix){ return prefix + "-" + (++_counter) + "-" + Date.now(); }
 
 function defaultState(){
+  var catPack = uid("ck"), catClean = uid("ck"), catGroceries = uid("ck"), catBus = uid("ck");
   return {
     checklist: [
-      {id:uid("ck"), category:"Pack", text:"Build packing list (Ignite/conference + personal)", owner:"Chris", priority:"Medium", due:"2026-11-12", done:false},
-      {id:uid("ck"), category:"Pack", text:"Pack bags (both travelers)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
-      {id:uid("ck"), category:"Clean house", text:"Deep clean before departure (house ready for Sally/Bill + kids)", owner:"Chris", priority:"Medium", due:"2026-11-14", done:false},
-      {id:uid("ck"), category:"Groceries", text:"Plan meals for the kids for 11/16–11/22", owner:"Chris/Inez", priority:"Medium", due:"2026-11-12", done:false},
-      {id:uid("ck"), category:"Groceries", text:"Grocery shop for the week (stock for 4 kids + Sally/Bill)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
-      {id:uid("ck"), category:"Bus / school coordination", text:"Notify the school bus driver that grandparents will be picking up/dropping off", owner:"Chris/Inez", priority:"High", due:"2026-11-14", done:false},
-      {id:uid("ck"), category:"Bus / school coordination", text:"Make a printout with photos of Sally & Bill for the bus driver", owner:"Chris/Inez", priority:"Medium", due:"2026-11-14", done:false}
+      {id:catPack, parentId:ROOT, text:"Pack"},
+      {id:uid("ck"), parentId:catPack, text:"Build packing list (Ignite/conference + personal)", owner:"Chris", priority:"Medium", due:"2026-11-12", done:false},
+      {id:uid("ck"), parentId:catPack, text:"Pack bags (both travelers)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
+      {id:catClean, parentId:ROOT, text:"Clean house"},
+      {id:uid("ck"), parentId:catClean, text:"Deep clean before departure (house ready for Sally/Bill + kids)", owner:"Chris", priority:"Medium", due:"2026-11-14", done:false},
+      {id:catGroceries, parentId:ROOT, text:"Groceries"},
+      {id:uid("ck"), parentId:catGroceries, text:"Plan meals for the kids for 11/16–11/22", owner:"Chris/Inez", priority:"Medium", due:"2026-11-12", done:false},
+      {id:uid("ck"), parentId:catGroceries, text:"Grocery shop for the week (stock for 4 kids + Sally/Bill)", owner:"Chris/Inez", priority:"High", due:"2026-11-15", done:false},
+      {id:catBus, parentId:ROOT, text:"Bus / school coordination"},
+      {id:uid("ck"), parentId:catBus, text:"Notify the school bus driver that grandparents will be picking up/dropping off", owner:"Chris/Inez", priority:"High", due:"2026-11-14", done:false},
+      {id:uid("ck"), parentId:catBus, text:"Make a printout with photos of Sally & Bill for the bus driver", owner:"Chris/Inez", priority:"Medium", due:"2026-11-14", done:false}
     ],
     days: [
       {date:"2026-11-16", label:"Mon 11/16 — Travel day", entries:[
@@ -214,13 +234,39 @@ function defaultState(){
   };
 }
 
+// One-time upgrade from the old flat {category: "Pack"} shape to the
+// parentId tree: turns each distinct category string into a real top-level
+// node and repoints its items at that node's id. Safe to call on
+// already-migrated data (it's a no-op once nothing has a bare `category`).
+function migrateChecklist(list){
+  if(!list || !list.length) return list || [];
+  var isLegacy = list.some(function(i){ return i && i.category !== undefined && i.parentId === undefined; });
+  if(!isLegacy) return list;
+  var seen = {}, order = [], catIds = {}, catNodes = [];
+  LEGACY_CATEGORIES.forEach(function(c){ seen[c]=true; order.push(c); });
+  list.forEach(function(i){ if(i.category && !seen[i.category]){ seen[i.category]=true; order.push(i.category); } });
+  order.forEach(function(name){
+    var id = uid("ck");
+    catIds[name] = id;
+    catNodes.push({id:id, parentId:ROOT, text:name});
+  });
+  var items = list.map(function(i){
+    return {id:i.id, parentId: catIds[i.category] || ROOT, text:i.text, owner:i.owner, priority:i.priority, due:i.due, done:i.done};
+  });
+  return catNodes.concat(items);
+}
+
 var STATE = null;
 var LS_KEY = "ignite-trip-2026-v1";
 
 function loadLocal(){
   try{
     var raw = localStorage.getItem(LS_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw){
+      var parsed = JSON.parse(raw);
+      if(parsed && parsed.checklist) parsed.checklist = migrateChecklist(parsed.checklist);
+      return parsed;
+    }
   }catch(e){}
   return null;
 }
@@ -246,39 +292,66 @@ function dueChipClass(due, done){
   return "";
 }
 
-function renderChecklist(){
-  var html = CATEGORIES.map(function(cat){
-    var items = STATE.checklist.filter(function(i){ return i.category===cat; });
-    var rows = items.map(function(i){
-      var cls = dueChipClass(i.due, i.done);
-      return '' +
-        '<div class="item'+(i.done?' done':'')+'" data-id="'+i.id+'">' +
-          '<input type="checkbox" '+(i.done?'checked':'')+' onchange="toggleDone(\''+i.id+'\')">' +
-          '<div class="item-body">' +
-            '<div class="item-text" contenteditable="true" onblur="editChecklistField(\''+i.id+'\',\'text\',this.textContent)">'+esc(i.text)+'</div>' +
-            '<div class="meta-row">' +
-              '<select class="chip" onchange="editChecklistField(\''+i.id+'\',\'owner\',this.value)">' +
-                OWNERS_CHECKLIST.map(function(o){return '<option value="'+o+'"'+(o===i.owner?' selected':'')+'>'+o+'</option>';}).join('') +
-              '</select>' +
-              '<select class="chip" onchange="editChecklistField(\''+i.id+'\',\'priority\',this.value)">' +
-                ["Low","Medium","High"].map(function(p){return '<option value="'+p+'"'+(p===i.priority?' selected':'')+'>'+p+'</option>';}).join('') +
-              '</select>' +
-              '<input class="chip due '+cls+'" type="date" value="'+(i.due||'')+'" onchange="editChecklistField(\''+i.id+'\',\'due\',this.value)">' +
-            '</div>' +
+function childrenOf(parentId){
+  return STATE.checklist.filter(function(i){ return i.parentId===parentId; });
+}
+
+// Renders one checklist node (any depth below the top level) plus its own
+// children, recursively — this is what lets "Passport" sit under "Gather
+// documents" and still have its own sub-steps underneath it.
+function renderChecklistNode(node){
+  var cls = dueChipClass(node.due, node.done);
+  var kids = childrenOf(node.id);
+  return '' +
+    '<div class="node" data-id="'+node.id+'">' +
+      '<div class="item'+(node.done?' done':'')+'">' +
+        '<input type="checkbox" '+(node.done?'checked':'')+' onchange="toggleDone(\''+node.id+'\')">' +
+        '<div class="item-body">' +
+          '<div class="item-text" contenteditable="true" onblur="editChecklistField(\''+node.id+'\',\'text\',this.textContent)">'+esc(node.text)+'</div>' +
+          '<div class="meta-row">' +
+            '<select class="chip" onchange="editChecklistField(\''+node.id+'\',\'owner\',this.value)">' +
+              OWNERS_CHECKLIST.map(function(o){return '<option value="'+o+'"'+(o===node.owner?' selected':'')+'>'+o+'</option>';}).join('') +
+            '</select>' +
+            '<select class="chip" onchange="editChecklistField(\''+node.id+'\',\'priority\',this.value)">' +
+              ["Low","Medium","High"].map(function(p){return '<option value="'+p+'"'+(p===node.priority?' selected':'')+'>'+p+'</option>';}).join('') +
+            '</select>' +
+            '<input class="chip due '+cls+'" type="date" value="'+(node.due||'')+'" onchange="editChecklistField(\''+node.id+'\',\'due\',this.value)">' +
           '</div>' +
-          '<button class="del" onclick="deleteChecklistItem(\''+i.id+'\')" title="Delete">✕</button>' +
-        '</div>';
-    }).join('');
-    return '' +
-      '<div class="cat">' +
-        '<h2>'+esc(cat)+'</h2>' +
-        rows +
+        '</div>' +
+        '<button class="del" onclick="deleteNode(\''+node.id+'\')" title="Delete">✕</button>' +
+      '</div>' +
+      '<div class="node-children">' +
+        kids.map(renderChecklistNode).join('') +
         '<div class="add-row">' +
-          '<input type="text" placeholder="Add item…" id="new-'+slug(cat)+'" onkeydown="if(event.key===\'Enter\')addChecklistItem('+attrStr(cat)+')">' +
-          '<button onclick="addChecklistItem('+attrStr(cat)+')">Add</button>' +
+          '<input type="text" placeholder="Add sub-item…" id="new-child-'+node.id+'" onkeydown="if(event.key===\'Enter\')addChild(\''+node.id+'\')">' +
+          '<button onclick="addChild(\''+node.id+'\')">Add</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+}
+
+function renderChecklist(){
+  var cats = childrenOf(ROOT);
+  var html = cats.map(function(cat){
+    var kids = childrenOf(cat.id);
+    return '' +
+      '<div class="cat" data-id="'+cat.id+'">' +
+        '<h2>' +
+          '<span class="cat-title" contenteditable="true" onblur="editChecklistField(\''+cat.id+'\',\'text\',this.textContent)">'+esc(cat.text)+'</span>' +
+          '<button class="del" onclick="deleteNode(\''+cat.id+'\')" title="Delete section">✕</button>' +
+        '</h2>' +
+        kids.map(renderChecklistNode).join('') +
+        '<div class="add-row">' +
+          '<input type="text" placeholder="Add item…" id="new-child-'+cat.id+'" onkeydown="if(event.key===\'Enter\')addChild(\''+cat.id+'\')">' +
+          '<button onclick="addChild(\''+cat.id+'\')">Add</button>' +
         '</div>' +
       '</div>';
   }).join('');
+  html += '' +
+    '<div class="add-row" style="background:var(--paper); border:1px dashed var(--line); border-radius:10px;">' +
+      '<input type="text" placeholder="Add a new section (e.g. Gather documents)…" id="new-category" onkeydown="if(event.key===\'Enter\')addCategory()">' +
+      '<button onclick="addCategory()">Add section</button>' +
+    '</div>';
   document.getElementById('view-checklist').innerHTML = html;
 }
 
@@ -339,8 +412,6 @@ function entryTimeHtml(date, e){
 function render(){ renderChecklist(); renderDays(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-'); }
-function attrStr(s){ return JSON.stringify(s).replace(/"/g, '&quot;'); }
 
 // ============================================================================
 // MUTATIONS — every mutation calls persist()
@@ -364,15 +435,31 @@ function editChecklistField(id, field, value){
   i[field] = value;
   persist();
 }
-function deleteChecklistItem(id){
-  STATE.checklist = STATE.checklist.filter(function(x){ return x.id!==id; });
+// Deletes a node and everything nested under it (a section's items, a
+// task's sub-steps, however many levels deep) — otherwise deleting a parent
+// would leave its children orphaned with a parentId pointing at nothing.
+function deleteNode(id){
+  var toDelete = [id];
+  for(var i=0; i<toDelete.length; i++){
+    var pid = toDelete[i];
+    STATE.checklist.forEach(function(n){ if(n.parentId===pid) toDelete.push(n.id); });
+  }
+  STATE.checklist = STATE.checklist.filter(function(n){ return toDelete.indexOf(n.id)===-1; });
   persist();
 }
-function addChecklistItem(category){
-  var input = document.getElementById('new-'+slug(category));
+function addChild(parentId){
+  var input = document.getElementById('new-child-'+parentId);
   var text = (input.value||'').trim();
   if(!text) return;
-  STATE.checklist.push({id:uid("ck"), category:category, text:text, owner:"Chris/Inez", priority:"Medium", due:"", done:false});
+  STATE.checklist.push({id:uid("ck"), parentId:parentId, text:text, owner:"Chris/Inez", priority:"Medium", due:"", done:false});
+  input.value='';
+  persist();
+}
+function addCategory(){
+  var input = document.getElementById('new-category');
+  var text = (input.value||'').trim();
+  if(!text) return;
+  STATE.checklist.push({id:uid("ck"), parentId:ROOT, text:text});
   input.value='';
   persist();
 }
@@ -467,7 +554,7 @@ var FB = (function(){
     return [];
   }
   function _normalize(data){
-    var checklist = _fbArr(data.checklist);
+    var checklist = migrateChecklist(_fbArr(data.checklist));
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
     return {checklist:checklist, days:days};
   }
