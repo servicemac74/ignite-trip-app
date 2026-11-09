@@ -87,6 +87,10 @@
     flex:1; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
     font-size:14px; min-width:0;
   }
+  .add-row select{
+    flex:none; border:1px solid var(--line); border-radius:8px; padding:8px 4px;
+    font-size:13px; background:var(--paper); color:var(--ink);
+  }
   .add-row button{
     flex:none; border:none; background:var(--accent); color:var(--accent-ink);
     border-radius:8px; padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer;
@@ -107,6 +111,13 @@
   .entry:last-of-type{border-bottom:none;}
   .entry-time{
     flex:none; width:68px; font-size:12px; color:var(--muted); outline:none; padding-top:2px;
+  }
+  .entry-time-pick{
+    flex:none; width:98px; display:flex; flex-wrap:wrap; gap:2px;
+  }
+  .entry-time-pick select{
+    font-size:10.5px; color:var(--muted); border:1px solid var(--line); border-radius:6px;
+    padding:1px 2px; background:var(--paper);
   }
   .entry-body{flex:1; min-width:0;}
   .entry-title{font-size:14.5px; font-weight:600; outline:none; word-break:break-word;}
@@ -159,6 +170,9 @@
 var CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordination"];
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
+var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
+var MINUTES = ["00","05","10","15","20","25","30","35","40","45","50","55"];
+var AMPM = ["AM","PM"];
 
 var _counter = 0;
 function uid(prefix){ return prefix + "-" + (++_counter) + "-" + Date.now(); }
@@ -252,8 +266,8 @@ function renderChecklist(){
         '<h2>'+esc(cat)+'</h2>' +
         rows +
         '<div class="add-row">' +
-          '<input type="text" placeholder="Add item…" id="new-'+slug(cat)+'" onkeydown="if(event.key===\'Enter\')addChecklistItem('+JSON.stringify(cat)+')">' +
-          '<button onclick="addChecklistItem('+JSON.stringify(cat)+')">Add</button>' +
+          '<input type="text" placeholder="Add item…" id="new-'+slug(cat)+'" onkeydown="if(event.key===\'Enter\')addChecklistItem('+attrStr(cat)+')">' +
+          '<button onclick="addChecklistItem('+attrStr(cat)+')">Add</button>' +
         '</div>' +
       '</div>';
   }).join('');
@@ -266,7 +280,7 @@ function renderDays(){
     var rows = entries.length ? entries.map(function(e){
       return '' +
         '<div class="entry" data-id="'+e.id+'">' +
-          '<div class="entry-time" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'time\',this.textContent)">'+esc(e.time||'')+'</div>' +
+          entryTimeHtml(d.date, e) +
           '<div class="entry-body">' +
             '<div class="entry-title" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'title\',this.textContent)">'+esc(e.title)+'</div>' +
             '<div class="entry-notes" contenteditable="true" onblur="editEntryField(\''+d.date+'\',\''+e.id+'\',\'notes\',this.textContent)">'+esc(e.notes||'')+'</div>' +
@@ -282,7 +296,9 @@ function renderDays(){
         '<h2>'+esc(d.label)+'</h2>' +
         rows +
         '<div class="add-row">' +
-          '<input type="text" placeholder="Time (e.g. 10:00 AM)" style="max-width:110px" id="newtime-'+d.date+'">' +
+          '<select id="newtime-h-'+d.date+'">' + HOURS.map(function(h){return '<option value="'+h+'">'+h+'</option>';}).join('') + '</select>' +
+          '<select id="newtime-m-'+d.date+'">' + MINUTES.map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('') + '</select>' +
+          '<select id="newtime-ap-'+d.date+'">' + AMPM.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('') + '</select>' +
           '<input type="text" placeholder="Suggestion…" id="newtitle-'+d.date+'" onkeydown="if(event.key===\'Enter\')addEntry(\''+d.date+'\')">' +
           '<button onclick="addEntry(\''+d.date+'\')">Add</button>' +
         '</div>' +
@@ -291,10 +307,32 @@ function renderDays(){
   document.getElementById('view-days').innerHTML = html;
 }
 
+function parseSimpleTime(str){
+  if(!str) return {h:"--", m:"00", ap:"AM"};
+  var match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(str).trim());
+  if(!match) return null;
+  var h = match[1], m = match[2], ap = match[3].toUpperCase();
+  if(HOURS.indexOf(h)===-1 || MINUTES.indexOf(m)===-1) return null;
+  return {h:h, m:m, ap:ap};
+}
+
+function entryTimeHtml(date, e){
+  var pt = parseSimpleTime(e.time);
+  if(!pt){
+    return '<div class="entry-time" contenteditable="true" onblur="editEntryField(\''+date+'\',\''+e.id+'\',\'time\',this.textContent)">'+esc(e.time||'')+'</div>';
+  }
+  return '<div class="entry-time-pick">' +
+    '<select onchange="editEntryTime(\''+date+'\',\''+e.id+'\',\'h\',this.value)">' + HOURS.map(function(h){return '<option value="'+h+'"'+(h===pt.h?' selected':'')+'>'+h+'</option>';}).join('') + '</select>' +
+    '<select onchange="editEntryTime(\''+date+'\',\''+e.id+'\',\'m\',this.value)">' + MINUTES.map(function(m){return '<option value="'+m+'"'+(m===pt.m?' selected':'')+'>'+m+'</option>';}).join('') + '</select>' +
+    '<select onchange="editEntryTime(\''+date+'\',\''+e.id+'\',\'ap\',this.value)">' + AMPM.map(function(p){return '<option value="'+p+'"'+(p===pt.ap?' selected':'')+'>'+p+'</option>';}).join('') + '</select>' +
+    '</div>';
+}
+
 function render(){ renderChecklist(); renderDays(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-'); }
+function attrStr(s){ return JSON.stringify(s).replace(/"/g, '&quot;'); }
 
 // ============================================================================
 // MUTATIONS — every mutation calls persist()
@@ -339,6 +377,16 @@ function editEntryField(date, id, field, value){
   e[field] = value;
   persist();
 }
+function editEntryTime(date, id, which, value){
+  var d = STATE.days.find(function(x){ return x.date===date; });
+  if(!d) return;
+  var e = d.entries.find(function(x){ return x.id===id; });
+  if(!e) return;
+  var pt = parseSimpleTime(e.time) || {h:"--", m:"00", ap:"AM"};
+  pt[which] = value;
+  e.time = (pt.h==="--") ? "" : (pt.h+":"+pt.m+" "+pt.ap);
+  persist();
+}
 function deleteEntry(date, id){
   var d = STATE.days.find(function(x){ return x.date===date; });
   if(!d) return;
@@ -348,12 +396,15 @@ function deleteEntry(date, id){
 function addEntry(date){
   var d = STATE.days.find(function(x){ return x.date===date; });
   if(!d) return;
-  var timeEl = document.getElementById('newtime-'+date);
+  var hEl = document.getElementById('newtime-h-'+date);
+  var mEl = document.getElementById('newtime-m-'+date);
+  var apEl = document.getElementById('newtime-ap-'+date);
   var titleEl = document.getElementById('newtitle-'+date);
   var title = (titleEl.value||'').trim();
   if(!title) return;
-  d.entries.push({id:uid("en"), time:(timeEl.value||'').trim(), title:title, owner:"Both", notes:""});
-  timeEl.value=''; titleEl.value='';
+  var time = (hEl.value==='--') ? '' : (hEl.value+':'+mEl.value+' '+apEl.value);
+  d.entries.push({id:uid("en"), time:time, title:title, owner:"Both", notes:""});
+  hEl.value='--'; mEl.value='00'; apEl.value='AM'; titleEl.value='';
   persist();
 }
 
