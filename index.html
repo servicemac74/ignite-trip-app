@@ -134,6 +134,13 @@
 
   .edit-icon{color:var(--muted); font-size:11px;}
   [contenteditable="true"]:focus{background:#fffce0; border-radius:4px;}
+
+  .update-banner{
+    position:fixed; left:12px; right:12px; bottom:12px; z-index:50;
+    background:var(--accent); color:var(--accent-ink); border:none; border-radius:10px;
+    padding:12px 16px; font-size:14px; font-weight:600; text-align:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.2); cursor:pointer;
+  }
 </style>
 </head>
 <body>
@@ -539,6 +546,45 @@ var FB = (function(){
   }
 
   return { scheduleWrite: scheduleWrite };
+})();
+
+// ============================================================================
+// UPDATE CHECK
+// Phones that "Add to Home Screen" often keep this page suspended in memory
+// and reuse it instead of refetching, so a new git push can sit unnoticed for
+// days. This polls the page's own Last-Modified/ETag (via a no-store HEAD
+// request — no service worker needed) and prompts a reload when it changes,
+// both on a timer and whenever the app comes back to the foreground.
+// ============================================================================
+(function(){
+  var CHECK_INTERVAL_MS = 5*60*1000;
+  var _knownTag = null;
+
+  function check(){
+    fetch(location.pathname, {method:'HEAD', cache:'no-store'}).then(function(r){
+      var tag = r.headers.get('etag') || r.headers.get('last-modified');
+      if(!tag) return;
+      if(_knownTag && tag !== _knownTag) showBanner();
+      _knownTag = tag;
+    }).catch(function(){});
+  }
+
+  function showBanner(){
+    if(document.getElementById('updateBanner')) return;
+    var b = document.createElement('div');
+    b.id = 'updateBanner';
+    b.className = 'update-banner';
+    b.textContent = 'A new version is available — tap to reload';
+    b.onclick = function(){ location.reload(); };
+    document.body.appendChild(b);
+  }
+
+  check();
+  setInterval(check, CHECK_INTERVAL_MS);
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') check();
+  });
+  window.addEventListener('pageshow', check);
 })();
 </script>
 </body>
