@@ -75,6 +75,9 @@
     display:inline-block; font-size:10.5px; color:var(--muted); background:var(--bg);
     border-radius:20px; padding:1px 7px; font-weight:600; flex:none;
   }
+  .item.has-kids-1{background:#e3f2e8;}
+  .item.has-kids-2{background:#eef8f1;}
+  .item.has-kids-3{background:#f6fbf8;}
   .checklist-toolbar{display:flex; gap:8px; margin-bottom:10px;}
   .toolbar-btn{
     flex:none; border:1px solid var(--line); background:var(--paper); color:var(--ink);
@@ -215,6 +218,27 @@
     border-radius:20px; padding:1px 7px;
   }
   .cal-entry-time{font-size:12px; color:var(--muted); flex:none; width:68px;}
+
+  .undated-section{
+    margin-top:16px; padding-top:12px; border-top:1px dashed var(--line);
+  }
+  .undated-section > h3{
+    margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--muted); font-weight:700;
+  }
+  .undated-node{margin-bottom:1px;}
+  .undated-children{margin-left:13px; padding-left:8px; border-left:1px solid var(--line);}
+  .undated-label{font-size:12px; font-weight:600; color:var(--muted); padding:3px 6px; border-radius:5px;}
+  .undated-label.undated-cat{text-transform:uppercase; letter-spacing:.03em; font-size:11px; padding:3px 0;}
+  .undated-item{
+    display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink);
+    padding:3px 6px; border-radius:5px;
+  }
+  .undated-item input[type=checkbox]{width:14px; height:14px; flex:none; accent-color:var(--accent);}
+  .undated-item.done span{color:var(--muted); text-decoration:line-through;}
+  .undated-item.has-kids-1, .undated-label.has-kids-1{background:#e3f2e8;}
+  .undated-item.has-kids-2, .undated-label.has-kids-2{background:#eef8f1;}
+  .undated-item.has-kids-3, .undated-label.has-kids-3{background:#f6fbf8;}
 </style>
 </head>
 <body>
@@ -419,7 +443,8 @@ function addRowHtml(parentId, placeholder){
 // documents" and still have its own sub-steps underneath it. Its children
 // (and their own "add sub-item" row) collapse behind a chevron when there's
 // too much to scan at once.
-function renderChecklistNode(node){
+function renderChecklistNode(node, depth){
+  depth = depth || 1;
   var cls = dueChipClass(node.due, node.done);
   var kids = childrenOf(node.id);
   var hasKids = kids.length>0;
@@ -430,12 +455,12 @@ function renderChecklistNode(node){
     : '<span class="toggle-spacer"></span>';
   var childrenHtml = isCollapsed ? '' :
     '<div class="node-children">' +
-      kids.map(renderChecklistNode).join('') +
+      kids.map(function(k){ return renderChecklistNode(k, depth+1); }).join('') +
       (addOpen ? addRowHtml(node.id, 'Add sub-item…') : '') +
     '</div>';
   return '' +
     '<div class="node" data-id="'+node.id+'">' +
-      '<div class="item'+(node.done?' done':'')+'">' +
+      '<div class="item'+(node.done?' done':'')+(hasKids?' '+groupShadeClass(depth):'')+'">' +
         toggleBtn +
         '<input type="checkbox" '+(node.done?'checked':'')+' onchange="toggleDone(\''+node.id+'\')">' +
         '<div class="item-body">' +
@@ -473,7 +498,7 @@ function renderChecklist(){
       ? '<button class="toggle" onclick="toggleCollapse(\''+cat.id+'\')" title="'+(isCollapsed?'Expand':'Collapse')+'">'+(isCollapsed?'▸':'▾')+'</button>'
       : '<span class="toggle-spacer"></span>';
     var bodyHtml = isCollapsed ? '' :
-      kids.map(renderChecklistNode).join('') +
+      kids.map(function(k){ return renderChecklistNode(k, 1); }).join('') +
       (addOpen ? addRowHtml(cat.id, 'Add item…') : '');
     return '' +
       '<div class="cat" data-id="'+cat.id+'">' +
@@ -635,12 +660,64 @@ function renderCalendar(){
   if(!agendaRows) agendaRows = '<div class="empty-day">Nothing due or planned this day.</div>';
   var agendaHtml = '<div class="cal-agenda"><h3>'+formatCalDateLabel(_selectedCalDate)+'</h3>' + agendaRows + '</div>';
 
-  document.getElementById('view-cal').innerHTML = gridHtml + agendaHtml;
+  document.getElementById('view-cal').innerHTML = gridHtml + agendaHtml + renderUndatedSection();
+}
+
+// ----------------------------------------------------------------------------
+// No-date section: everything that can't show on the grid above because it
+// has no due date, still grouped the same way the Prep Checklist groups it
+// (category -> item -> sub-item), just compact. A node with a date but an
+// undated descendant still appears, as a plain (non-checkable) label, purely
+// so the undated item underneath it has somewhere to hang — it's already on
+// the grid in its own right.
+// ----------------------------------------------------------------------------
+function nodeIsTask(node){ return node.parentId !== ROOT; }
+
+function subtreeHasUndated(node){
+  if(nodeIsTask(node) && !node.due) return true;
+  return childrenOf(node.id).some(subtreeHasUndated);
+}
+
+function renderUndatedNode(node, depth){
+  depth = depth || 1;
+  var kids = childrenOf(node.id).filter(subtreeHasUndated);
+  var hasKids = kids.length>0;
+  var shadeCls = hasKids ? ' '+groupShadeClass(depth) : '';
+  var selfHtml;
+  if(nodeIsTask(node)){
+    selfHtml = !node.due
+      ? '<div class="undated-item'+(node.done?' done':'')+shadeCls+'">' +
+          '<input type="checkbox" '+(node.done?'checked':'')+' onchange="toggleDone(\''+node.id+'\')">' +
+          '<span>'+esc(node.text)+'</span>' +
+        '</div>'
+      // A dated item only ever appears here because it has an undated
+      // descendant, so hasKids (and shadeCls) is always true in this branch.
+      : '<div class="undated-label'+shadeCls+'">'+esc(node.text)+'</div>';
+  } else {
+    selfHtml = '<div class="undated-label undated-cat">'+esc(node.text)+'</div>';
+  }
+  var kidsHtml = kids.map(function(k){ return renderUndatedNode(k, depth+1); }).join('');
+  return '<div class="undated-node">' + selfHtml + (kidsHtml ? '<div class="undated-children">'+kidsHtml+'</div>' : '') + '</div>';
+}
+
+function renderUndatedSection(){
+  var cats = childrenOf(ROOT).filter(subtreeHasUndated);
+  if(!cats.length) return '';
+  return '<div class="undated-section"><h3>No date set</h3>' + cats.map(function(c){ return renderUndatedNode(c, 1); }).join('') + '</div>';
 }
 
 function render(){ renderChecklist(); renderDays(); renderCalendar(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+// A node with no children stays plain white — only nodes acting as a group
+// (subtask holding its own sub-steps, like "Kitchen" holding "Counters")
+// get tinted, progressively lighter the deeper the grouping goes, so a
+// glance tells subtask from sub-subtask instead of everything blending
+// into one white block. Caps at 3 shades; deeper nesting reuses the
+// lightest one rather than fading to nothing.
+var GROUP_SHADE_LEVELS = 3;
+function groupShadeClass(depth){ return 'has-kids-'+Math.min(depth, GROUP_SHADE_LEVELS); }
 
 // A plain location.reload() can still be served a cached copy of this page
 // (that's the whole reason the update-check/stale-block banners exist in
