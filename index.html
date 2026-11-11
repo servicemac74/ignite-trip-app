@@ -36,7 +36,7 @@
     position:sticky; top:58px; z-index:4;
   }
   nav.tabs button{
-    flex:1; border:none; background:none; padding:12px 8px; font-size:14px;
+    flex:1; border:none; background:none; padding:10px 4px; font-size:12.5px;
     font-weight:600; color:var(--muted); border-bottom:2px solid transparent;
     cursor:pointer;
   }
@@ -239,6 +239,17 @@
   .undated-item.has-kids-1, .undated-label.has-kids-1{background:#e3f2e8;}
   .undated-item.has-kids-2, .undated-label.has-kids-2{background:#eef8f1;}
   .undated-item.has-kids-3, .undated-label.has-kids-3{background:#f6fbf8;}
+
+  .notes-card{
+    background:var(--paper); border:1px solid var(--line); border-radius:10px;
+    margin-bottom:14px; overflow:hidden;
+  }
+  .note-row{
+    display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
+    align-items:flex-start;
+  }
+  .note-row:last-child{border-bottom:none;}
+  .note-text{flex:1; font-size:14.5px; outline:none; word-break:break-word; white-space:pre-wrap;}
 </style>
 </head>
 <body>
@@ -256,12 +267,14 @@
   <button id="tab-checklist" class="on" onclick="setTab('checklist')">Prep Checklist</button>
   <button id="tab-days" onclick="setTab('days')">Trip Days</button>
   <button id="tab-cal" onclick="setTab('cal')">Calendar</button>
+  <button id="tab-notes" onclick="setTab('notes')">Notes</button>
 </nav>
 
 <main>
   <div id="view-checklist" class="view on"></div>
   <div id="view-days" class="view"></div>
   <div id="view-cal" class="view"></div>
+  <div id="view-notes" class="view"></div>
 </main>
 
 <!-- Firebase SDK (compat) -->
@@ -332,7 +345,8 @@ function defaultState(){
       {date:"2026-11-22", label:"Sun 11/22 — Arrival", entries:[
         {id:uid("en"), time:"5:16 AM ET", title:"Arrive ATL", owner:"Both", notes:""}
       ]}
-    ]
+    ],
+    notes: []
   };
 }
 
@@ -377,6 +391,7 @@ function saveLocal(){
 }
 
 STATE = loadLocal() || defaultState();
+STATE.notes = STATE.notes || []; // older saved data predates the Notes tab
 
 // ============================================================================
 // RENDER
@@ -706,7 +721,47 @@ function renderUndatedSection(){
   return '<div class="undated-section"><h3>No date set</h3>' + cats.map(function(c){ return renderUndatedNode(c, 1); }).join('') + '</div>';
 }
 
-function render(){ renderChecklist(); renderDays(); renderCalendar(); }
+// ============================================================================
+// NOTES
+// A flat, unstructured place for things that don't fit a to-do item or a
+// day-plan entry — a door code, a wifi password, anything just worth having
+// on hand. Plain text, no fields, no dates: add, edit in place, delete.
+// ============================================================================
+function renderNotes(){
+  var rows = STATE.notes.map(function(n){
+    return '<div class="note-row" data-id="'+n.id+'">' +
+      '<div class="note-text" contenteditable="true" onblur="editNoteText(\''+n.id+'\',this.textContent)">'+esc(n.text)+'</div>' +
+      '<button class="del" onclick="deleteNoteItem(\''+n.id+'\')" title="Delete">✕</button>' +
+    '</div>';
+  }).join('');
+  var html = STATE.notes.length ? '<div class="notes-card">'+rows+'</div>' : '';
+  if(!STATE.notes.length) html += '<div class="empty-day">Nothing saved yet — add your first note below.</div>';
+  html += '<div class="add-row">' +
+    '<input type="text" placeholder="Add a note (door code, wifi password, etc.)…" id="new-note" onkeydown="if(event.key===\'Enter\')addNoteEntry()">' +
+    '<button onclick="addNoteEntry()">Add</button>' +
+  '</div>';
+  document.getElementById('view-notes').innerHTML = html;
+}
+function addNoteEntry(){
+  var input = document.getElementById('new-note');
+  var text = (input.value||'').trim();
+  if(!text) return;
+  STATE.notes.push({id:uid('nt'), text:text});
+  input.value='';
+  persist();
+}
+function deleteNoteItem(id){
+  STATE.notes = STATE.notes.filter(function(n){ return n.id!==id; });
+  persist();
+}
+function editNoteText(id, value){
+  var n = STATE.notes.find(function(x){ return x.id===id; });
+  if(!n) return;
+  n.text = value;
+  persist();
+}
+
+function render(){ renderChecklist(); renderDays(); renderCalendar(); renderNotes(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
@@ -834,7 +889,7 @@ function addEntry(date){
 // TABS
 // ============================================================================
 function setTab(which){
-  ['checklist','days','cal'].forEach(function(w){
+  ['checklist','days','cal','notes'].forEach(function(w){
     document.getElementById('tab-'+w).classList.toggle('on', w===which);
     document.getElementById('view-'+w).classList.toggle('on', w===which);
   });
@@ -883,7 +938,8 @@ var FB = (function(){
   function _normalize(data){
     var checklist = migrateChecklist(_fbArr(data.checklist));
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
-    return {checklist:checklist, days:days};
+    var notes = _fbArr(data.notes);
+    return {checklist:checklist, days:days, notes:notes};
   }
 
   function _buildPayload(){
@@ -892,15 +948,16 @@ var FB = (function(){
       version: SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
       checklist: STATE.checklist,
-      days: STATE.days
+      days: STATE.days,
+      notes: STATE.notes
     };
   }
 
   function _applyPayload(result){
     if(!result) return;
     var norm = _normalize(result);
-    if(!norm.checklist.length && !norm.days.length) return;
-    STATE = {checklist:norm.checklist, days:norm.days};
+    if(!norm.checklist.length && !norm.days.length && !norm.notes.length) return;
+    STATE = {checklist:norm.checklist, days:norm.days, notes:norm.notes};
     saveLocal();
     render();
   }
