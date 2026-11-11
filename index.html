@@ -249,7 +249,12 @@
     align-items:flex-start;
   }
   .note-row:last-child{border-bottom:none;}
-  .note-text{flex:1; font-size:14.5px; outline:none; word-break:break-word; white-space:pre-wrap;}
+  .note-text{flex:1; font-size:14.5px; word-break:break-word; white-space:pre-wrap;}
+  .note-text a{color:var(--accent); word-break:break-all;}
+  .note-edit-input{
+    flex:1; border:1px solid var(--line); border-radius:8px; padding:6px 8px;
+    font-size:14.5px; min-width:0;
+  }
 </style>
 </head>
 <body>
@@ -300,12 +305,14 @@ var ROOT = "root";
 var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordination"];
 
 // Bump this whenever the STATE shape changes in a way older code can't
-// safely read (like the flat-category -> parentId-tree change this build
-// ships). The Firebase sync module compares this against whatever version
-// is already saved: if Firebase has a newer version than this build
-// understands, this client is stale and gets blocked from writing (and
-// editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 2;
+// safely read (the flat-category -> parentId-tree change for checklist
+// items was version 2; turning notes from a flat list into the same
+// parentId-tree shape is version 3). The Firebase sync module compares
+// this against whatever version is already saved: if Firebase has a newer
+// version than this build understands, this client is stale and gets
+// blocked from writing (and editing) instead of silently overwriting newer
+// data with older data.
+var SCHEMA_VERSION = 3;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -372,6 +379,18 @@ function migrateChecklist(list){
   return catNodes.concat(items);
 }
 
+// One-time upgrade from the original flat notes shape ({id,text}, no
+// hierarchy) to the parentId tree: every existing note just becomes a
+// top-level note (parentId ROOT) — there was nothing to nest it under
+// before, so that's the only sensible placement. Safe to call on
+// already-migrated data.
+function migrateNotes(list){
+  if(!list || !list.length) return list || [];
+  var isLegacy = list.some(function(n){ return n && n.parentId === undefined; });
+  if(!isLegacy) return list;
+  return list.map(function(n){ return {id:n.id, parentId:ROOT, text:n.text}; });
+}
+
 var STATE = null;
 var LS_KEY = "ignite-trip-2026-v1";
 
@@ -381,6 +400,7 @@ function loadLocal(){
     if(raw){
       var parsed = JSON.parse(raw);
       if(parsed && parsed.checklist) parsed.checklist = migrateChecklist(parsed.checklist);
+      if(parsed && parsed.notes) parsed.notes = migrateNotes(parsed.notes);
       return parsed;
     }
   }catch(e){}
@@ -725,33 +745,150 @@ function renderUndatedSection(){
 // NOTES
 // A flat, unstructured place for things that don't fit a to-do item or a
 // day-plan entry — a door code, a wifi password, anything just worth having
-// on hand. Plain text, no fields, no dates: add, edit in place, delete.
+// on hand. Plain text, no fields, no dates: add, edit, delete.
+//
+// A note's text renders as a plain (non-editable) div with any link turned
+// into a real <a>, not a contenteditable one — browsers generally treat a
+// plain click on a link inside contenteditable as "place the cursor", not
+// "follow it" (that's why Gmail/Docs need ctrl/cmd-click to open a link
+// you're editing), and a touchscreen has no ctrl/cmd-click. So the one note
+// being edited (_editingNoteId) swaps to a plain <input> instead of staying
+// contenteditable; every other note stays tappable.
 // ============================================================================
-function renderNotes(){
-  var rows = STATE.notes.map(function(n){
-    return '<div class="note-row" data-id="'+n.id+'">' +
-      '<div class="note-text" contenteditable="true" onblur="editNoteText(\''+n.id+'\',this.textContent)">'+esc(n.text)+'</div>' +
-      '<button class="del" onclick="deleteNoteItem(\''+n.id+'\')" title="Delete">✕</button>' +
-    '</div>';
-  }).join('');
-  var html = STATE.notes.length ? '<div class="notes-card">'+rows+'</div>' : '';
-  if(!STATE.notes.length) html += '<div class="empty-day">Nothing saved yet — add your first note below.</div>';
-  html += '<div class="add-row">' +
-    '<input type="text" placeholder="Add a note (door code, wifi password, etc.)…" id="new-note" onkeydown="if(event.key===\'Enter\')addNoteEntry()">' +
-    '<button onclick="addNoteEntry()">Add</button>' +
+var _editingNoteId = null;
+
+// Turns a recognized URL-shaped substring into a real link — operates on
+// text already run through esc(), so anything that could break out of the
+// href="..." attribute (a literal quote) has already become &quot;. Scripty
+// schemes are left as plain text on purpose; they're never worth linking
+// and a crafted one could otherwise run as a stored-XSS link, which matters
+// here since anyone with the app's link can add a note.
+function linkify(text){
+  var escaped = esc(text);
+  return escaped.replace(/([a-z][a-z0-9+.-]*:\/\/[^\s<]+|tel:[^\s<]+|mailto:[^\s<]+)/gi, function(url){
+    if(/^(javascript|data|vbscript):/i.test(url)) return url;
+    var trailing = '';
+    var m = /[.,;:!?)"']+$/.exec(url);
+    if(m){ trailing = m[0]; url = url.slice(0, -trailing.length); }
+    var isWeb = /^https?:\/\//i.test(url);
+    return '<a href="'+url+'"'+(isWeb ? ' target="_blank" rel="noopener noreferrer"' : '')+'>'+url+'</a>'+trailing;
+  });
+}
+
+function startEditNote(id){
+  _editingNoteId = id;
+  renderNotes();
+  var el = document.getElementById('note-edit-'+id);
+  if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+function saveEditNote(id){
+  var el = document.getElementById('note-edit-'+id);
+  if(!el) return; // already saved/closed — e.g. a stray blur after Enter already re-rendered
+  var val = el.value;
+  _editingNoteId = null;
+  editNoteText(id, val);
+}
+
+// Same parentId-tree convention as the checklist (ROOT-parented top-level
+// notes, any node can hold its own sub-notes, collapse/expand + depth
+// shading reuse the exact same helpers and CSS) — just without a checkbox
+// or owner/priority/due, and with the view/edit split a tappable link
+// needs (see above).
+var _notesCollapsed = {};
+var _notesAddOpen = {};
+
+function noteChildrenOf(parentId){
+  return STATE.notes.filter(function(n){ return n.parentId===parentId; });
+}
+function toggleNoteCollapse(id){
+  _notesCollapsed[id] = !_notesCollapsed[id];
+  render();
+}
+function toggleNoteAddOpen(id){
+  _notesAddOpen[id] = !_notesAddOpen[id];
+  if(_notesAddOpen[id]) _notesCollapsed[id] = false;
+  render();
+  if(_notesAddOpen[id]){
+    var el = document.getElementById('new-note-child-'+id);
+    if(el) el.focus();
+  }
+}
+function collapseAllNotes(){
+  STATE.notes.forEach(function(n){ if(noteChildrenOf(n.id).length) _notesCollapsed[n.id] = true; });
+  render();
+}
+function expandAllNotes(){
+  _notesCollapsed = {};
+  render();
+}
+
+function noteAddRowHtml(parentId, placeholder){
+  return '<div class="add-row">' +
+    '<input type="text" placeholder="'+esc(placeholder)+'" id="new-note-child-'+parentId+'" onkeydown="if(event.key===\'Enter\')addNoteChild(\''+parentId+'\')">' +
+    '<button onclick="addNoteChild(\''+parentId+'\')">Add</button>' +
   '</div>';
+}
+
+function renderNoteNode(node, depth){
+  depth = depth || 1;
+  var kids = noteChildrenOf(node.id);
+  var hasKids = kids.length>0;
+  var isCollapsed = !!_notesCollapsed[node.id];
+  var addOpen = !!_notesAddOpen[node.id];
+  var isEditing = (_editingNoteId === node.id);
+  var toggleBtn = hasKids
+    ? '<button class="toggle" onclick="toggleNoteCollapse(\''+node.id+'\')" title="'+(isCollapsed?'Expand':'Collapse')+'">'+(isCollapsed?'▸':'▾')+'</button>'
+    : '<span class="toggle-spacer"></span>';
+  var body = isEditing
+    ? '<input type="text" class="note-edit-input" id="note-edit-'+node.id+'" value="'+esc(node.text)+'" onkeydown="if(event.key===\'Enter\')saveEditNote(\''+node.id+'\')" onblur="saveEditNote(\''+node.id+'\')">'
+    : '<div class="note-text">'+linkify(node.text)+(isCollapsed && hasKids ? ' <span class="kid-count">'+kids.length+' note'+(kids.length===1?'':'s')+'</span>' : '')+'</div>';
+  var childrenHtml = isCollapsed ? '' :
+    '<div class="node-children">' +
+      kids.map(function(k){ return renderNoteNode(k, depth+1); }).join('') +
+      (addOpen ? noteAddRowHtml(node.id, 'Add sub-note…') : '') +
+    '</div>';
+  return '' +
+    '<div class="node" data-id="'+node.id+'">' +
+      '<div class="item'+(hasKids?' '+groupShadeClass(depth):'')+'">' +
+        toggleBtn +
+        body +
+        (isEditing ? '' : '<button class="plus" onclick="toggleNoteAddOpen(\''+node.id+'\')" title="Add sub-note">+</button>') +
+        (isEditing ? '' : '<button class="plus" onclick="startEditNote(\''+node.id+'\')" title="Edit">✎</button>') +
+        '<button class="del" onclick="deleteNoteItem(\''+node.id+'\')" title="Delete">✕</button>' +
+      '</div>' +
+      childrenHtml +
+    '</div>';
+}
+
+function renderNotes(){
+  var tops = noteChildrenOf(ROOT);
+  var html = '<div class="checklist-toolbar">' +
+    '<button class="toolbar-btn" onclick="expandAllNotes()">Expand all</button>' +
+    '<button class="toolbar-btn" onclick="collapseAllNotes()">Collapse all</button>' +
+  '</div>';
+  if(!tops.length) html += '<div class="empty-day">Nothing saved yet — add your first note below.</div>';
+  html += tops.map(function(n){ return renderNoteNode(n, 1); }).join('');
+  html += noteAddRowHtml(ROOT, 'Add a note (door code, wifi password, etc.)…');
   document.getElementById('view-notes').innerHTML = html;
 }
-function addNoteEntry(){
-  var input = document.getElementById('new-note');
+function addNoteChild(parentId){
+  var input = document.getElementById('new-note-child-'+parentId);
   var text = (input.value||'').trim();
   if(!text) return;
-  STATE.notes.push({id:uid('nt'), text:text});
+  STATE.notes.push({id:uid('nt'), parentId:parentId, text:text});
   input.value='';
   persist();
 }
+// Deletes a note and everything nested under it, same reasoning as the
+// checklist's deleteNode — otherwise its children would be left pointing
+// at a parentId that no longer exists.
 function deleteNoteItem(id){
-  STATE.notes = STATE.notes.filter(function(n){ return n.id!==id; });
+  var toDelete = [id];
+  for(var i=0; i<toDelete.length; i++){
+    var pid = toDelete[i];
+    STATE.notes.forEach(function(n){ if(n.parentId===pid) toDelete.push(n.id); });
+  }
+  STATE.notes = STATE.notes.filter(function(n){ return toDelete.indexOf(n.id)===-1; });
   persist();
 }
 function editNoteText(id, value){
@@ -938,7 +1075,7 @@ var FB = (function(){
   function _normalize(data){
     var checklist = migrateChecklist(_fbArr(data.checklist));
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
-    var notes = _fbArr(data.notes);
+    var notes = migrateNotes(_fbArr(data.notes));
     return {checklist:checklist, days:days, notes:notes};
   }
 
