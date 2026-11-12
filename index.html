@@ -271,6 +271,14 @@
   }
   .place-row:last-child{border-bottom:none;}
   .place-body{flex:1; min-width:0;}
+  .place-details{margin-top:8px;overflow-wrap:anywhere;}
+  .place-details button,.place-details-editor button{margin-top:6px;}
+  .place-details-editor label{display:block;margin-top:8px;}
+  .place-details-editor input,.place-details-editor textarea{box-sizing:border-box;width:100%;padding:8px;}
+  .place-reference-edit{display:grid;gap:5px;margin:10px 0;padding:8px;border:1px solid #bbb;border-radius:8px;}
+  .place-reference-edit button{justify-self:start;}
+  .place-notes-text{white-space:pre-wrap;padding:6px 0;}
+  .place-details-error{color:#b00020;margin:6px 0;}
   .place-label{font-size:14.5px; font-weight:600; word-break:break-word;}
   .place-nopin{font-size:11px; color:var(--muted); font-weight:400;}
   .place-link{display:inline-block; margin-top:3px; font-size:12.5px; color:var(--accent);}
@@ -403,12 +411,13 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // adding `category`/`tier`/`time` to each place is version 6; adding
 // `ptype` is version 7 — each of those version bumps exists because an
 // older build's migratePlaces doesn't know the new field and would
-// silently drop it on its next write.
+// silently drop it on its next write. Version 8 adds address, notes and
+// references (label/url/creator) to Places.
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 7;
+var SCHEMA_VERSION = 8;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -498,6 +507,22 @@ function migrateNotes(list){
 // dropped by a filter it predates — and gives every place `ptype`
 // (version 7), defaulting to untagged rather than hidden by the new
 // restaurant/site/tourist-trap/logistics filter.
+function safeReferenceUrl(value){
+  try {
+    var u = new URL(String(value || "").trim());
+    return (u.protocol === "https:" || u.protocol === "http:") ? u.href : "";
+  } catch(e){ return ""; }
+}
+function normalizePlaceReferences(value){
+  // RTDB may turn an array into an object keyed by numeric strings.
+  var list = Array.isArray(value) ? value :
+    (value && typeof value === "object" ? Object.keys(value)
+      .filter(function(k){ return /^\d+$/.test(k); })
+      .sort(function(a,b){ return +a-+b; }).map(function(k){ return value[k]; }) : []);
+  return list.filter(function(r){ return r && safeReferenceUrl(r.url); }).map(function(r){
+    return {label:String(r.label || "Reference"), url:safeReferenceUrl(r.url), creator:String(r.creator || "")};
+  });
+}
 function migratePlaces(list){
   if(!list) return [];
   return list.map(function(p){
@@ -511,7 +536,10 @@ function migratePlaces(list){
       category: p.category || "personal",
       tier: p.tier || "pass",
       time: p.time || "",
-      ptype: p.ptype || ""
+      ptype: p.ptype || "",
+      address: String(p.address || ""),
+      notes: String(p.notes || ""),
+      references: normalizePlaceReferences(p.references)
     };
   });
 }
@@ -1033,6 +1061,8 @@ var _placesMap = null;
 var _placesMarkersLayer = null;
 var _editingPlaceId = null;
 var PLACES_NO_DAY = "";
+var PLACES_ALL_DAYS = "all";
+var _editingPlaceDetailsId = null;
 var _selectedPlacesDate = null;
 var _selectedCategory = "personal";
 var _selectedPtype = ""; // "" = all types
@@ -1055,7 +1085,7 @@ var PLACE_TYPES = [
 // from the card's own dropdown.
 function placesForView(){
   return STATE.places.filter(function(p){
-    return (p.date||PLACES_NO_DAY) === _selectedPlacesDate &&
+    return (_selectedPlacesDate === PLACES_ALL_DAYS || (p.date||PLACES_NO_DAY) === _selectedPlacesDate) &&
            (p.category||"personal") === _selectedCategory &&
            (_selectedPtype === "" || (p.ptype||"") === _selectedPtype);
   });
@@ -1184,11 +1214,14 @@ function addPlace(){
     mapsUrl: isLink ? raw : buildMapsSearchUrl(raw),
     lat: coords ? coords.lat : null,
     lng: coords ? coords.lng : null,
-    date: _selectedPlacesDate || PLACES_NO_DAY,
+    date: _selectedPlacesDate === PLACES_ALL_DAYS ? PLACES_NO_DAY : (_selectedPlacesDate || PLACES_NO_DAY),
     category: _selectedCategory,
     tier: "pass",
     time: "",
-    ptype: ""
+    ptype: "",
+    address: "",
+    notes: "",
+    references: []
   };
   STATE.places.push(place);
   persist();
@@ -1197,7 +1230,7 @@ function addPlace(){
     geocodeWithFallback(raw).then(function(found){
       if(!found) return;
       var p = STATE.places.find(function(x){ return x.id===place.id; });
-      if(!p) return;
+      if(!p || p.address || p.label !== place.label) return;
       p.lat = found.lat; p.lng = found.lng;
       persist();
     });
@@ -1306,10 +1339,11 @@ function saveEditPlace(id){
   // moment it's renamed — most often to the actual place name/address once
   // the user has it in front of them, which is exactly what geocoding needs.
   if(p.lat == null){
-    geocodeWithFallback(val).then(function(found){
+    var query = p.address || val;
+    geocodeWithFallback(query).then(function(found){
       if(!found) return;
       var p2 = STATE.places.find(function(x){ return x.id===id; });
-      if(!p2) return;
+      if(!p2 || (p2.address || p2.label) !== query) return;
       p2.lat = found.lat; p2.lng = found.lng;
       persist();
     });
@@ -1413,13 +1447,14 @@ function renderPlacesDayBar(){
     return '<button class="'+cls+'" onclick="selectPlacesDate(\''+d.date+'\')">'+shortDayLabel(d.date)+'</button>';
   }).join('');
   html += '<button class="day-pill'+(_selectedPlacesDate===PLACES_NO_DAY?' on':'')+'" onclick="selectPlacesDate(\'\')">No day</button>';
+  html = '<button class="day-pill'+(_selectedPlacesDate===PLACES_ALL_DAYS?' on':'')+'" onclick="selectPlacesDate(\'all\')">All days</button>' + html;
   document.getElementById('placesDayBar').innerHTML = html;
 }
 function renderPlaceRow(p){
   var isEditing = (_editingPlaceId === p.id);
   var labelHtml = isEditing
     ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
-    : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin" title="Tap the pencil and rename it to the place name or address to try again">(no pin — rename it to add one)</span>' : '')+'</div>';
+    : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin" title="Use Edit details & links to add or correct the street address">(location not confirmed)</span>' : '')+'</div>';
   var tierHtml = '<select class="chip" onchange="setPlaceTier(\''+p.id+'\',this.value)" title="Love it or not">' +
     TIERS.map(function(t){ return '<option value="'+t.key+'"'+(t.key===(p.tier||'pass')?' selected':'')+'>'+t.label+'</option>'; }).join('') +
   '</select>';
@@ -1443,11 +1478,76 @@ function renderPlaceRow(p){
       labelHtml +
       '<br><a class="place-link" href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' +
       '<div class="meta-row">'+tierHtml+typeHtml+dayHtml+timeHtml+'</div>' +
+      renderPlaceDetails(p) +
     '</div>' +
     (isEditing ? '' : '<button class="plus" onclick="startEditPlace(\''+p.id+'\')" title="Rename">✎</button>') +
     '<button class="del" onclick="deletePlace(\''+p.id+'\')" title="Delete">✕</button>' +
   '</div>';
 }
+
+function renderReferenceEditorRow(r){
+  return '<div class="place-reference-edit">' +
+    '<input aria-label="Reference label" placeholder="Label (e.g. TikTok)" value="'+esc(r.label||'')+'">' +
+    '<input aria-label="Reference URL" type="url" placeholder="https://..." value="'+esc(r.url||'')+'">' +
+    '<input aria-label="Reference creator" placeholder="Creator (optional)" value="'+esc(r.creator||'')+'">' +
+    '<button type="button" onclick="this.parentNode.remove()" title="Remove reference">Remove</button></div>';
+}
+function renderPlaceDetails(p){
+  if(_editingPlaceDetailsId === p.id){
+    return '<div class="place-details-editor" id="place-details-'+p.id+'">' +
+      '<label>Street address<input class="place-address" value="'+esc(p.address||'')+'"></label>' +
+      '<label>Notes<textarea class="place-notes" rows="5" placeholder="Highlights, estimated duration, hours, prices and uncertainties">'+esc(p.notes||'')+'</textarea></label>' +
+      '<div>References</div><div class="place-references-editor">'+normalizePlaceReferences(p.references).map(renderReferenceEditorRow).join('')+'</div>' +
+      '<button type="button" onclick="addPlaceReferenceRow(\''+p.id+'\')">Add reference</button>' +
+      '<div class="place-details-error" role="alert"></div>' +
+      '<button type="button" onclick="savePlaceDetails(\''+p.id+'\')">Save details</button> ' +
+      '<button type="button" onclick="_editingPlaceDetailsId=null;renderPlacesList()">Cancel</button></div>';
+  }
+  var refs = normalizePlaceReferences(p.references);
+  return '<div class="place-details">' +
+    (p.address ? '<div>'+esc(p.address)+'</div>' : '') +
+    (p.notes ? '<details><summary>Notes</summary><div class="place-notes-text">'+esc(p.notes)+'</div></details>' : '') +
+    refs.map(function(r){return '<div><a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">'+esc(r.label)+'</a>'+(r.creator?' — '+esc(r.creator):'')+'</div>';}).join('') +
+    '<button type="button" onclick="_editingPlaceDetailsId=\''+p.id+'\';renderPlacesList()">Edit details &amp; links</button></div>';
+}
+function addPlaceReferenceRow(id){
+  var el=document.getElementById('place-details-'+id);
+  if(el) el.querySelector('.place-references-editor').insertAdjacentHTML('beforeend',renderReferenceEditorRow({}));
+}
+function savePlaceDetails(id){
+  var el=document.getElementById('place-details-'+id);
+  var p=STATE.places.find(function(x){return x.id===id;});
+  if(!el || !p) return;
+  var refs=[], invalid=false;
+  el.querySelectorAll('.place-reference-edit').forEach(function(row){
+    var inputs=row.querySelectorAll('input');
+    var label=inputs[0].value.trim(), raw=inputs[1].value.trim(), creator=inputs[2].value.trim();
+    if(!label && !raw && !creator) return;
+    var url=safeReferenceUrl(raw);
+    if(!url){invalid=true;return;}
+    refs.push({label:label||'Reference',url:url,creator:creator});
+  });
+  if(invalid){el.querySelector('.place-details-error').textContent='Each reference needs a complete http:// or https:// URL.';return;}
+  var address=el.querySelector('.place-address').value.trim();
+  var changed=address!==(p.address||'');
+  p.address=address;
+  p.notes=el.querySelector('.place-notes').value.trim();
+  p.references=refs;
+  if(changed){
+    p.lat=null; p.lng=null;
+    p.mapsUrl=buildMapsSearchUrl(address||p.label);
+  }
+  _editingPlaceDetailsId=null;
+  persist();
+  if(changed && address){
+    geocodeWithFallback(address).then(function(found){
+      var current=STATE.places.find(function(x){return x.id===id;});
+      if(!found || !current || current.address!==address) return;
+      current.lat=found.lat;current.lng=found.lng;persist();
+    });
+  }
+}
+
 function renderPlacesList(){
   var el = document.getElementById('placesList');
   if(!el) return;
@@ -1460,7 +1560,7 @@ function renderPlacesList(){
     '</div>';
   }).join('');
   if(!list.length){
-    el.innerHTML += '<div class="empty-day">No places saved for this day/category yet — paste a Google Maps link or type an address below.</div>';
+    el.innerHTML += '<div class="empty-day">No places match these filters — paste a Google Maps link or type an address below.</div>';
   }
   updatePlaceMarkers();
 }
@@ -1683,7 +1783,7 @@ var FB = (function(){
     var checklist = migrateChecklist(_fbArr(data.checklist));
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
     var notes = migrateNotes(_fbArr(data.notes));
-    var places = migratePlaces(_fbArr(data.places));
+    var places = migratePlaces(_fbArr(data.places).map(function(p){ return Object.assign({}, p, {references:_fbArr(p.references)}); }));
     return {checklist:checklist, days:days, notes:notes, places:places};
   }
 

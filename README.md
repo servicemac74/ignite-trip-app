@@ -11,7 +11,7 @@ If you are an AI coding assistant picking this repo up with no memory of prior s
 - **Persistence is two-layer:**
   - `localStorage` (key `ignite-trip-2026-v1`) — always on, works with no network, keeps the app usable offline.
   - **Firebase Realtime Database** (project `ignite-trip-app`, path `sessions/ignite-trip`, whole `STATE` stored as one JSON value at that path) — syncs across devices when online. Entirely optional at the code level: if the Firebase SDK fails to load or the network is down, the app still works from `localStorage` alone.
-- **Schema versioning guards against data loss.** Every write tags the payload with `SCHEMA_VERSION` (currently `7`, declared near the top of the script). If a client ever sees a *higher* version already saved than it understands, it blocks all editing with a full-screen "out of date, reload" message instead of silently overwriting newer data with an older shape. See `AGENTS.md` for the rule this implies about changing the data model.
+- **Schema versioning guards against data loss.** Every write tags the payload with `SCHEMA_VERSION` (currently `8`, declared near the top of the script). If a client ever sees a *higher* version already saved than it understands, it blocks all editing with a full-screen "out of date, reload" message instead of silently overwriting newer data with an older shape. See `AGENTS.md` for the rule this implies about changing the data model.
 - **Hosting is GitHub Pages**, not Firebase Hosting. `firebase.json`/`.firebaserc`/`database.rules.json` configure only the Realtime Database (rules deploy), not a hosted site — see **Deployment**.
 
 ## Data model: Places (the newest, most actively-changing part)
@@ -28,9 +28,16 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 | `category` | `"personal"` or `"conference"` — a second, independent top-level filter so the same app can plan the family trip and a conference schedule at once |
 | `tier` | `"love"` or `"pass"` — set via a dropdown on the card, or by dragging the card between the two tier sections |
 | `time` | optional `"H:MM AM/PM"` string, same picker Trip Days uses |
+| address | street address; editing retries geocoding and updates Maps link |
+| notes | free text for highlights, duration, verified details and uncertainties |
+| references | array of {label, url, creator}; HTTP(S) links; creator optional |
 | `ptype` | one of `restaurant` / `site` / `touristTrap` / `logistics` / `conferenceSession` / `vineyard`, or `""` if untagged |
 
 **Filters** (`_selectedPlacesDate`, `_selectedCategory`, `_selectedPtype`) are independent and all apply at once — see `placesForView()`. A newly-added place is filed under whichever day + category is currently selected (so there's no separate day/category picker in the quick-add form); type is the one field left untagged on add and set afterward from the card.
+
+**All days:** includes dated and undated places in the list and map, respecting category/type filters. No day shows only unscheduled places. Quick-add in All days creates an undated place. Places without coordinates remain in the list.
+
+**Details and references:** Edit details & links edits address, notes and multiple labeled links. Save persists; Cancel discards. URLs must use HTTP(S). Older places default to empty fields; numeric-keyed Firebase reference arrays normalize on read.
 
 **Map/color:** a free Leaflet.js + OpenStreetMap mini-map (no API key, no cost) renders a pin per visible place, colored by whichever of two independent signals the `_colorMode` toggle currently selects — `"tier"` (bright pink = love, muted gray = pass) or `"time"` (gold/blue/coral/purple by time-of-day bucket, see `placeColor()`/`timeOfDayBucket()`). Whichever signal isn't driving color still shows as the pin's glyph.
 
