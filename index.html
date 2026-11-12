@@ -839,12 +839,19 @@ function startEditNote(id){
   var el = document.getElementById('note-edit-'+id);
   if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
+// See saveEditPlace's comment — same Enter-then-reentrant-blur hazard: the
+// element existing is not enough to rule out a stray second call, since the
+// blur can fire synchronously mid-rebuild, before removal actually commits.
+var _savingNoteId = null;
 function saveEditNote(id){
+  if(_savingNoteId === id) return;
   var el = document.getElementById('note-edit-'+id);
   if(!el) return; // already saved/closed — e.g. a stray blur after Enter already re-rendered
+  _savingNoteId = id;
   var val = el.value;
   _editingNoteId = null;
   editNoteText(id, val);
+  _savingNoteId = null;
 }
 
 // Same parentId-tree convention as the checklist (ROOT-parented top-level
@@ -1001,6 +1008,43 @@ function geocodePlace(query){
     }).catch(function(){ return null; });
 }
 
+// A single exact query often comes back empty even though Nominatim knows
+// the street — OpenStreetMap's US address-point coverage is spotty at the
+// exact-house-number level, and mashing a venue name together with its full
+// street address (e.g. "East Cobb Pediatrics, 6110 Pine Mountain Rd, Kennesaw,
+// GA 30152", copied straight off a contact card) trips up its free-form
+// parser even when each piece alone would work. So on a miss, retry with
+// broader versions of the same text — dropping a leading venue name (after
+// the first comma) and/or a leading house number — landing an approximate
+// but still useful pin (same street/area) rather than none at all.
+function buildGeocodeAttempts(query){
+  var candidates = [query];
+  var commaIdx = query.indexOf(',');
+  if(commaIdx !== -1) candidates.push(query.slice(commaIdx+1).trim());
+  candidates.slice().forEach(function(c){
+    var stripped = c.replace(/^\s*\d+[\s,]*/, '');
+    if(stripped && candidates.indexOf(stripped) === -1) candidates.push(stripped);
+  });
+  var seen = {};
+  return candidates.filter(function(c){
+    if(!c || seen[c]) return false;
+    seen[c] = true;
+    return true;
+  });
+}
+function wait(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
+function geocodeWithFallback(query){
+  var attempts = buildGeocodeAttempts(query);
+  function tryNext(i){
+    if(i >= attempts.length) return Promise.resolve(null);
+    // Nominatim's usage policy asks for no more than ~1 request/second —
+    // the common case (first attempt hits) never pays this, only a retry.
+    var step = (i === 0) ? geocodePlace(attempts[i]) : wait(1100).then(function(){ return geocodePlace(attempts[i]); });
+    return step.then(function(found){ return found || tryNext(i+1); });
+  }
+  return tryNext(0);
+}
+
 function addPlace(){
   var input = document.getElementById('new-place');
   var raw = (input.value||'').trim();
@@ -1021,7 +1065,7 @@ function addPlace(){
   persist();
 
   if(!isLink && !coords){
-    geocodePlace(raw).then(function(found){
+    geocodeWithFallback(raw).then(function(found){
       if(!found) return;
       var p = STATE.places.find(function(x){ return x.id===place.id; });
       if(!p) return;
@@ -1046,13 +1090,40 @@ function startEditPlace(id){
   var el = document.getElementById('place-edit-'+id);
   if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
+// Saving (Enter, then blur) can re-enter this mid-rebuild: replacing the
+// edit <input> via innerHTML while it still has focus makes the browser
+// fire a 'blur' on it as part of that very removal, synchronously, before
+// the element is actually gone — so a plain "does the element still exist"
+// check doesn't catch it (it still does, for an instant) and a second
+// render() starts while the first is still inside its own innerHTML
+// assignment, which throws. This flag blocks the second call outright,
+// before it can touch the DOM at all.
+var _savingPlaceId = null;
 function saveEditPlace(id){
+  if(_savingPlaceId === id) return;
   var el = document.getElementById('place-edit-'+id);
   if(!el) return;
+  _savingPlaceId = id;
   var val = el.value;
   _editingPlaceId = null;
   var p = STATE.places.find(function(x){ return x.id===id; });
-  if(p){ p.label = val; persist(); } else { renderPlacesList(); }
+  if(!p){ _savingPlaceId = null; renderPlacesList(); return; }
+  p.label = val;
+  persist();
+  _savingPlaceId = null;
+  // A pin-less place (a shortened Google Maps link with no coordinates in
+  // the URL, or an address that failed to geocode) gets one more shot the
+  // moment it's renamed — most often to the actual place name/address once
+  // the user has it in front of them, which is exactly what geocoding needs.
+  if(p.lat == null){
+    geocodeWithFallback(val).then(function(found){
+      if(!found) return;
+      var p2 = STATE.places.find(function(x){ return x.id===id; });
+      if(!p2) return;
+      p2.lat = found.lat; p2.lng = found.lng;
+      persist();
+    });
+  }
 }
 
 // Builds the Places page's fixed skeleton (day bar + map div + list div +
@@ -1129,7 +1200,7 @@ function renderPlacesList(){
     var isEditing = (_editingPlaceId === p.id);
     var labelHtml = isEditing
       ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
-      : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin">(no pin)</span>' : '')+'</div>';
+      : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin" title="Tap the pencil and rename it to the place name or address to try again">(no pin — rename it to add one)</span>' : '')+'</div>';
     var moveHtml = '<select class="chip" onchange="movePlaceDay(\''+p.id+'\',this.value)" title="Move to another day">' +
       STATE.days.map(function(d){ return '<option value="'+d.date+'"'+(d.date===(p.date||'')?' selected':'')+'>'+shortDayLabel(d.date)+'</option>'; }).join('') +
       '<option value=""'+((p.date||'')===''?' selected':'')+'>No day</option>' +
