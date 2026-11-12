@@ -11,7 +11,7 @@
     --line:#e2e0da; --accent:#2f6b4f; --accent-ink:#ffffff;
     --warn:#b4452f; --am:#c98a2c; --ok:#2f6b4f; --chip:#eef0ea;
     --love:#d6336c; --pass:#b9c2bc;
-    --tod-morning:#d9a441; --tod-afternoon:#f08c2e; --tod-evening:#8a5fa8; --tod-night:#3b4a78; --tod-none:#9aa39d;
+    --tod-morning:#e0a52e; --tod-afternoon:#2f8fd1; --tod-evening:#d1495b; --tod-night:#6a3fa0; --tod-none:#9aa39d;
   }
   *{box-sizing:border-box;}
   body{
@@ -290,6 +290,16 @@
   }
   .seg-btn.on{color:var(--accent); background:var(--chip); border-bottom-color:var(--accent);}
 
+  .ptype-bar{
+    display:flex; align-items:center; gap:8px; padding:8px 14px;
+    border-bottom:1px solid var(--line); background:var(--bg);
+  }
+  .ptype-label{font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.03em;}
+  .ptype-bar select{
+    border:1px solid var(--line); border-radius:8px; padding:6px 10px;
+    font-size:13px; background:var(--paper); color:var(--ink);
+  }
+
   .tier-section{border-bottom:1px solid var(--line);}
   .tier-section:last-child{border-bottom:none;}
   .tier-section.drop-target{background:var(--chip); outline:2px dashed var(--accent); outline-offset:-2px;}
@@ -355,7 +365,7 @@
 // STATE = { checklist: [ {id,parentId,text,owner,priority,due,done} ],
 //           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ],
 //           notes:     [ {id,parentId,text} ],
-//           places:    [ {id,label,mapsUrl,lat,lng,date,category,tier,time} ] }
+//           places:    [ {id,label,mapsUrl,lat,lng,date,category,tier,time,ptype} ] }
 // A place's `date` matches one of days[].date (grouping it under that trip
 // day, on its own page), or "" for a place not tied to any specific day.
 // `category` is "personal" or "conference" (a second top-level filter,
@@ -368,6 +378,9 @@
 // drives the pin color when the toggle is set to "by time of day" instead,
 // with the icon showing the other signal (time as an emoji glyph when
 // color is spent on tier; nothing extra when color is already time).
+// `ptype` is "restaurant"/"site"/"touristTrap"/"logistics" (or "" if
+// untagged) — a second, independent filter alongside category/day, so
+// "show me just the restaurants on the 17th" narrows the same view.
 //
 // checklist is a tree flattened into one array: a node's parentId points at
 // its parent's id. Top-level sections (what used to be the fixed "category"
@@ -386,14 +399,15 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // items was version 2; turning notes from a flat list into the same
 // parentId-tree shape is version 3; adding the places list is version 4;
 // giving each place a `date` so Places can group by trip day is version 5;
-// adding `category`/`tier`/`time` to each place is version 6 — each of
-// those version bumps exists because an older build's migratePlaces
-// doesn't know the new field and would silently drop it on its next write.
+// adding `category`/`tier`/`time` to each place is version 6; adding
+// `ptype` is version 7 — each of those version bumps exists because an
+// older build's migratePlaces doesn't know the new field and would
+// silently drop it on its next write.
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 6;
+var SCHEMA_VERSION = 7;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -478,9 +492,11 @@ function migrateNotes(list){
 // (e.g. a lat that got written as a string) can't break the map or the
 // list, gives every place a `date` (version 5) so a place saved before
 // per-day grouping existed just lands in the "No day" bucket instead of
-// vanishing, and gives every place `category`/`tier`/`time` (version 6) —
-// an older place defaults to Personal/Or-not/no-time rather than being
-// dropped by a filter it predates.
+// vanishing, gives every place `category`/`tier`/`time` (version 6) — an
+// older place defaults to Personal/Or-not/no-time rather than being
+// dropped by a filter it predates — and gives every place `ptype`
+// (version 7), defaulting to untagged rather than hidden by the new
+// restaurant/site/tourist-trap/logistics filter.
 function migratePlaces(list){
   if(!list) return [];
   return list.map(function(p){
@@ -493,7 +509,8 @@ function migratePlaces(list){
       date: p.date || "",
       category: p.category || "personal",
       tier: p.tier || "pass",
-      time: p.time || ""
+      time: p.time || "",
+      ptype: p.ptype || ""
     };
   });
 }
@@ -1017,17 +1034,32 @@ var _editingPlaceId = null;
 var PLACES_NO_DAY = "";
 var _selectedPlacesDate = null;
 var _selectedCategory = "personal";
+var _selectedPtype = ""; // "" = all types
 var _colorMode = "tier"; // "tier" (by preference) or "time" (by time of day)
 var TIERS = [{key:"love", label:"❤️ Love it"}, {key:"pass", label:"🤷 Or not"}];
+var PLACE_TYPES = [
+  {key:"restaurant", label:"🍽️ Restaurant"},
+  {key:"site", label:"🏛️ Site"},
+  {key:"touristTrap", label:"🎡 Tourist Trap"},
+  {key:"logistics", label:"🧳 Logistics"}
+];
 
-// The current day + category selection together decide what's visible —
-// and, symmetrically, what a newly-added place gets filed under (see
-// addPlace), so there's never a separate "which day/category" picker in
-// the add form itself.
+// The current day + category + type selection together decide what's
+// visible — and, symmetrically, what a newly-added place gets filed under
+// (see addPlace), so there's never a separate "which day/category" picker
+// in the add form itself. Type is the one exception: it's left untagged on
+// add (so quick-adding never stalls on a fourth choice) and set afterward
+// from the card's own dropdown.
 function placesForView(){
   return STATE.places.filter(function(p){
-    return (p.date||PLACES_NO_DAY) === _selectedPlacesDate && (p.category||"personal") === _selectedCategory;
+    return (p.date||PLACES_NO_DAY) === _selectedPlacesDate &&
+           (p.category||"personal") === _selectedCategory &&
+           (_selectedPtype === "" || (p.ptype||"") === _selectedPtype);
   });
+}
+function selectPtype(val){
+  _selectedPtype = val;
+  renderPlacesPage();
 }
 function shortDayLabel(dateStr){
   var d = new Date(dateStr+'T00:00:00');
@@ -1152,7 +1184,8 @@ function addPlace(){
     date: _selectedPlacesDate || PLACES_NO_DAY,
     category: _selectedCategory,
     tier: "pass",
-    time: ""
+    time: "",
+    ptype: ""
   };
   STATE.places.push(place);
   persist();
@@ -1181,6 +1214,12 @@ function setPlaceTier(id, tier){
   var p = STATE.places.find(function(x){ return x.id===id; });
   if(!p) return;
   p.tier = tier;
+  persist();
+}
+function setPlaceType(id, ptype){
+  var p = STATE.places.find(function(x){ return x.id===id; });
+  if(!p) return;
+  p.ptype = ptype;
   persist();
 }
 function editPlaceTime(id, which, value){
@@ -1287,6 +1326,7 @@ function ensurePlacesSkeleton(){
     '<div class="notes-card">' +
       '<h2 class="places-head">Places</h2>' +
       '<div id="placesCategoryBar" class="seg-toggle"></div>' +
+      '<div id="placesPtypeBar" class="ptype-bar"></div>' +
       '<div id="placesDayBar" class="day-bar"></div>' +
       '<div id="placesColorModeBar" class="seg-toggle"></div>' +
       '<div id="placesMap" class="places-map"></div>' +
@@ -1309,6 +1349,17 @@ function renderPlacesColorModeBar(){
   document.getElementById('placesColorModeBar').innerHTML = modes.map(function(m){
     return '<button class="seg-btn'+(m.key===_colorMode?' on':'')+'" onclick="selectColorMode(\''+m.key+'\')">'+m.label+'</button>';
   }).join('');
+}
+// Single-select, not multi — functionally a radio group ("all, or exactly
+// one type"), just built as a plain <select> to match every other picker
+// in this app (owner, priority, tier, day…) rather than a one-off custom
+// radio-button popover.
+function renderPlacesPtypeBar(){
+  var options = '<option value=""'+(_selectedPtype===""?' selected':'')+'>All types</option>' +
+    PLACE_TYPES.map(function(t){ return '<option value="'+t.key+'"'+(t.key===_selectedPtype?' selected':'')+'>'+t.label+'</option>'; }).join('');
+  document.getElementById('placesPtypeBar').innerHTML =
+    '<span class="ptype-label">Type</span>' +
+    '<select onchange="selectPtype(this.value)">'+options+'</select>';
 }
 function initPlacesMap(){
   if(typeof L === 'undefined') return; // Leaflet failed to load — list/links still work without it
@@ -1369,6 +1420,10 @@ function renderPlaceRow(p){
   var tierHtml = '<select class="chip" onchange="setPlaceTier(\''+p.id+'\',this.value)" title="Love it or not">' +
     TIERS.map(function(t){ return '<option value="'+t.key+'"'+(t.key===(p.tier||'pass')?' selected':'')+'>'+t.label+'</option>'; }).join('') +
   '</select>';
+  var typeHtml = '<select class="chip" onchange="setPlaceType(\''+p.id+'\',this.value)" title="Type">' +
+    '<option value=""'+((p.ptype||'')===''?' selected':'')+'>No type</option>' +
+    PLACE_TYPES.map(function(t){ return '<option value="'+t.key+'"'+(t.key===(p.ptype||'')?' selected':'')+'>'+t.label+'</option>'; }).join('') +
+  '</select>';
   var dayHtml = '<select class="chip" onchange="movePlaceDay(\''+p.id+'\',this.value)" title="Move to another day">' +
     STATE.days.map(function(d){ return '<option value="'+d.date+'"'+(d.date===(p.date||'')?' selected':'')+'>'+shortDayLabel(d.date)+'</option>'; }).join('') +
     '<option value=""'+((p.date||'')===''?' selected':'')+'>No day</option>' +
@@ -1384,7 +1439,7 @@ function renderPlaceRow(p){
     '<div class="place-body">' +
       labelHtml +
       '<br><a class="place-link" href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' +
-      '<div class="meta-row">'+tierHtml+dayHtml+timeHtml+'</div>' +
+      '<div class="meta-row">'+tierHtml+typeHtml+dayHtml+timeHtml+'</div>' +
     '</div>' +
     (isEditing ? '' : '<button class="plus" onclick="startEditPlace(\''+p.id+'\')" title="Rename">✎</button>') +
     '<button class="del" onclick="deletePlace(\''+p.id+'\')" title="Delete">✕</button>' +
@@ -1409,6 +1464,7 @@ function renderPlacesList(){
 function renderPlacesPage(){
   ensurePlacesSkeleton();
   renderPlacesCategoryBar();
+  renderPlacesPtypeBar();
   renderPlacesDayBar();
   renderPlacesColorModeBar();
   renderPlacesList();
