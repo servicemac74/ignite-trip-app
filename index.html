@@ -341,7 +341,7 @@
   <div class="sub">San Francisco · Mon Nov 16 – Sun Nov 22</div>
   <div class="sync" id="syncBadge" data-state="offline">
     <span class="dot"></span><span id="syncLabel">offline</span>
-    <span style="color:var(--muted);">· build 2026-11-12-2</span>
+    <span style="color:var(--muted);">· build 2026-11-12-3</span>
   </div>
 </header>
 
@@ -414,11 +414,13 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // silently drop it on its next write. Version 8 adds address, notes and
 // references (label/url/creator) to Places. Version 9 adds the explicit
 // notRated tier; older clients cannot display that tier and must reload.
+// Version 10 expands the place-type vocabulary. Type keys are preserved
+// during migration; saved cards are reclassified explicitly, not guessed.
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 9;
+var SCHEMA_VERSION = 10;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -537,7 +539,8 @@ function migratePlaces(list){
       category: p.category || "personal",
       tier: p.tier || "pass",
       time: p.time || "",
-      ptype: p.ptype || "",
+      // Preserve existing and newly supported type keys across upgrades.
+      ptype: typeof p.ptype === "string" ? p.ptype : "",
       address: String(p.address || ""),
       notes: String(p.notes || ""),
       references: normalizePlaceReferences(p.references)
@@ -1071,11 +1074,18 @@ var _colorMode = "tier"; // "tier" (by preference) or "time" (by time of day)
 var TIERS = [{key:"notRated", label:"○ Not rated"}, {key:"love", label:"❤️ Love it"}, {key:"pass", label:"🤷 Or not"}];
 var PLACE_TYPES = [
   {key:"restaurant", label:"🍽️ Restaurant"},
-  {key:"site", label:"🏛️ Site"},
-  {key:"touristTrap", label:"🎡 Tourist Trap"},
-  {key:"logistics", label:"🧳 Logistics"},
+  {key:"cafeTea", label:"☕ Café, tea & sweets"},
+  {key:"barNightlife", label:"🍸 Bar & nightlife"},
+  {key:"vineyard", label:"🍇 Vineyard"},
+  {key:"parkGarden", label:"🌳 Park & garden"},
+  {key:"beachViewpoint", label:"🌅 Beach & viewpoint"},
+  {key:"landmarkMuseum", label:"🏛️ Landmark & museum"},
+  {key:"tourActivity", label:"🎟️ Tour & activity"},
+  {key:"shopping", label:"🛍️ Shopping"},
+  {key:"site", label:"📍 Site & district"},
+  {key:"logistics", label:"🧳 Transport / logistics"},
   {key:"conferenceSession", label:"🎤 Conference Session"},
-  {key:"vineyard", label:"🍇 Vineyard"}
+  {key:"touristTrap", label:"🎡 Tourist Trap"}
 ];
 
 // The current day + category + type selection together decide what's
