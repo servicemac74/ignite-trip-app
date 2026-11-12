@@ -359,7 +359,7 @@
   <div class="sub">San Francisco · Mon Nov 16 – Sun Nov 22</div>
   <div class="sync" id="syncBadge" data-state="offline">
     <span class="dot"></span><span id="syncLabel">offline</span>
-    <span style="color:var(--muted);">· build 2026-11-12-4</span>
+    <span style="color:var(--muted);">· build 2026-11-12-5</span>
   </div>
 </header>
 
@@ -436,11 +436,13 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // notRated tier; older clients cannot display that tier and must reload.
 // Version 10 expands the place-type vocabulary. Type keys are preserved
 // during migration; saved cards are reclassified explicitly, not guessed.
+// Version 11 adds STATE.reservations to the shared payload, with migration
+// of old states to an empty list. Older clients must reload before writing.
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 10;
+var SCHEMA_VERSION = 11;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -482,7 +484,8 @@ function defaultState(){
       ]}
     ],
     notes: [],
-    places: []
+    places: [],
+    reservations: []
   };
 }
 
@@ -579,6 +582,7 @@ function loadLocal(){
       if(parsed && parsed.checklist) parsed.checklist = migrateChecklist(parsed.checklist);
       if(parsed && parsed.notes) parsed.notes = migrateNotes(parsed.notes);
       if(parsed && parsed.places) parsed.places = migratePlaces(parsed.places);
+      if(parsed) parsed.reservations = migrateReservations(parsed.reservations);
       return parsed;
     }
   }catch(e){}
@@ -591,6 +595,7 @@ function saveLocal(){
 STATE = loadLocal() || defaultState();
 STATE.notes = STATE.notes || []; // older saved data predates the Notes tab
 STATE.places = STATE.places || []; // older saved data predates the Places section
+STATE.reservations = STATE.reservations || []; // schema 11
 
 // ============================================================================
 // RENDER
@@ -1631,15 +1636,17 @@ function editNoteText(id, value){
 }
 
 
-// Flights & Stays is intentionally browser-only. Never add it to STATE or
-// the Firebase payload while the shared database permits public access.
+// Flights & Stays uses shared trip storage as explicitly authorized.
+// The former browser-only store is retained as a migration backup.
+// No booking identifiers are seeded in source code.
 var RESERVATIONS_KEY = "ignite-private-reservations-v1";
 var RESERVATIONS_VERSION = 1;
 var _reservationDate = "all";
 var _reservationEditingId = null;
 var _reservationImportPreview = null;
 var _reservationStorageError = "";
-var RESERVATIONS = loadReservations();
+var RESERVATIONS = STATE.reservations;
+var _legacyLocalReservations = loadReservations();
 
 function reservationText(v){return typeof v === "string" ? v : (typeof v === "number" ? String(v) : "");}
 function normalizeReservation(r){
@@ -1660,6 +1667,16 @@ function normalizeReservation(r){
   out.links=(Array.isArray(r.links)?r.links:[]).map(function(l){return {label:reservationText(l.label)||"Reference",url:safeReferenceUrl(l.url)};}).filter(function(l){return l.url;});
   out.sourceNames=(Array.isArray(r.sourceNames)?r.sourceNames:[]).map(reservationText).filter(Boolean);
   return out;
+}
+function migrateReservations(list){
+  return (Array.isArray(list) ? list : []).map(normalizeReservation);
+}
+function legacyReservationsToSync(){
+  return _legacyLocalReservations.filter(function(r){return !RESERVATIONS.some(function(x){return x.id===r.id||reservationIdentity(x)===reservationIdentity(r);});});
+}
+function syncLegacyReservations(){
+  var pending=legacyReservationsToSync();
+  if(pending.length) persist("reservations",mergeReservationImports(RESERVATIONS,pending));
 }
 function loadReservations(){
   try{
@@ -1712,13 +1729,12 @@ function mergeReservationImports(current,incoming){
   return result;
 }
 function commitReservations(next){
-  if(_reservationStorageError){reservationMessage("Storage needs attention before saving: "+_reservationStorageError);return false;}
+  if(_staleBlocked){reservationMessage("Reload the app before saving this reservation.");return false;}
   try{
-    var normalized=next.map(normalizeReservation);
-    localStorage.setItem(RESERVATIONS_KEY,JSON.stringify({version:RESERVATIONS_VERSION,records:normalized}));
-    RESERVATIONS=normalized;_reservationEditingId=null;_reservationImportPreview=null;
-    renderReservations(true);return true;
-  }catch(e){reservationMessage("Could not save on this browser: "+e.message);return false;}
+    STATE.reservations=migrateReservations(next);
+    RESERVATIONS=STATE.reservations;_reservationEditingId=null;_reservationImportPreview=null;
+    persist();renderReservations(true);return true;
+  }catch(e){reservationMessage("Could not save reservation: "+e.message);return false;}
 }
 function reservationMessage(text){
   var el=document.getElementById("reservationMessage");if(el)el.textContent=text;
@@ -1768,12 +1784,13 @@ function reservationsForView(){
 }
 function renderReservations(force){
   var root=document.getElementById("view-reservations");if(!root)return;
-  // Firebase's shared-page re-renders must not discard a private form draft.
+  // Sync re-renders must not discard an open reservation form draft.
   if(!force&&(document.getElementById("reservationEditForm")||document.getElementById("reservationImportText")?.value))return;
   var list=reservationsForView();
   root.innerHTML='<section class="section"><h2>Flights &amp; Stays</h2>'+
-    '<p class="reservation-storage">Saved on this browser only · not synced. Booking codes stay out of the shared database. Clearing browser data removes these records; keep the original confirmations.</p>'+
+    '<p class="reservation-storage">Shared trip reservations · sync across devices when online. Keep your original confirmations as a backup.</p>'+
     '<div id="reservationMessage" role="status" aria-live="polite">'+esc(_reservationStorageError)+'</div>'+
+    (legacyReservationsToSync().length ? '<p><button onclick="syncLegacyReservations()">Sync reservations saved on this browser</button></p>' : "")+
     '<div class="day-bar"><button class="day-pill'+(_reservationDate==="all"?" on":"")+'" onclick="selectReservationDate(\'all\')">All days</button>'+
     STATE.days.map(function(d){return '<button class="day-pill'+(_reservationDate===d.date?" on":"")+'" onclick="selectReservationDate(\''+d.date+'\')">'+shortDayLabel(d.date)+'</button>';}).join("")+'</div>'+
     '<p class="reservation-muted">Times are local to each airport or hotel. Gold: morning · Blue: afternoon · Coral: evening · Purple: night. Dates and timezone labels remain visible.</p>'+
@@ -1782,7 +1799,7 @@ function renderReservations(force){
     list.map(renderReservationCard).join("")+
     (!list.length?'<p>No reservations saved for this view.</p>':"")+
     '<p class="reservation-muted">Missing a reservation? Add it when the confirmation is available.</p>'+
-    '<details><summary>Import reservation data</summary><p>Paste reservation JSON to preview before saving on this browser. Re-importing the same flight or stay merges references and travelers.</p>'+
+    '<details><summary>Import reservation data</summary><p>Paste reservation JSON to preview before saving to the shared trip. Re-importing the same flight or stay merges references and travelers.</p>'+
     '<textarea id="reservationImportText" aria-label="Reservation import JSON" rows="7"></textarea><p><button onclick="previewReservationImport()">Preview import</button></p><div id="reservationImportPreview"></div></details></section>';
 }
 function selectReservationDate(date){_reservationDate=date;renderReservations(true);}
@@ -1809,7 +1826,7 @@ function editReservation(id,kind){
     '<label>Notes<textarea name="notes" rows="5">'+esc(r.notes)+'</textarea></label>'+
     '<label>Links — one label and URL per line, separated by |<textarea name="links" rows="3">'+esc(r.links.map(function(l){return l.label+" | "+l.url;}).join("\n"))+'</textarea></label>'+
     '<label>Source filenames — one per line<textarea name="sourceNames" rows="3">'+esc(r.sourceNames.join("\n"))+'</textarea></label>'+
-    '<p><button type="submit">Save on this browser</button> <button type="button" onclick="_reservationEditingId=null;renderReservations(true)">Cancel</button></p></form>';
+    '<p><button type="submit">Save reservation</button> <button type="button" onclick="_reservationEditingId=null;renderReservations(true)">Cancel</button></p></form>';
   document.getElementById("reservationEditor").innerHTML=fields;
   document.getElementById("reservationEditor").scrollIntoView({block:"start"});
 }
@@ -1842,14 +1859,14 @@ function previewReservationImport(){
     if(parsed.version!==RESERVATIONS_VERSION||!Array.isArray(parsed.records))throw new Error("Expected reservation JSON with version 1 and a records array.");
     var rows=parsed.records.map(normalizeReservation);if(!rows.length)throw new Error("There are no reservations to import.");
     _reservationImportPreview=rows;
-    document.getElementById("reservationImportPreview").innerHTML='<p>'+rows.length+' reservation(s) ready. '+mergeReservationImports(RESERVATIONS,rows).length+' total after merging.</p><ul>'+rows.map(function(r){return '<li>'+esc(r.title)+' — '+esc(reservationDay(r.start.date))+'</li>';}).join("")+'</ul><button onclick="applyReservationImport()">Save imported reservations on this browser</button>';
+    document.getElementById("reservationImportPreview").innerHTML='<p>'+rows.length+' reservation(s) ready. '+mergeReservationImports(RESERVATIONS,rows).length+' total after merging.</p><ul>'+rows.map(function(r){return '<li>'+esc(r.title)+' — '+esc(reservationDay(r.start.date))+'</li>';}).join("")+'</ul><button onclick="applyReservationImport()">Save imported reservations</button>';
   }catch(e){document.getElementById("reservationImportPreview").textContent=e.message;}
 }
 function applyReservationImport(){if(_reservationImportPreview)persist("reservations",mergeReservationImports(RESERVATIONS,_reservationImportPreview));}
-window.addEventListener("storage",function(e){if(e.key===RESERVATIONS_KEY){RESERVATIONS=loadReservations();renderReservations();}});
+window.addEventListener("storage",function(e){if(e.key===RESERVATIONS_KEY){_legacyLocalReservations=loadReservations();renderReservations();}});
 
 
-function render(){ renderChecklist(); renderDays(); renderCalendar(); renderNotes(); renderPlacesPage(); renderReservations(); }
+function render(){ RESERVATIONS=STATE.reservations || []; renderChecklist(); renderDays(); renderCalendar(); renderNotes(); renderPlacesPage(); renderReservations(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
@@ -2035,7 +2052,10 @@ var FB = (function(){
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
     var notes = migrateNotes(_fbArr(data.notes));
     var places = migratePlaces(_fbArr(data.places).map(function(p){ return Object.assign({}, p, {references:_fbArr(p.references)}); }));
-    return {checklist:checklist, days:days, notes:notes, places:places};
+    var reservations = migrateReservations(_fbArr(data.reservations).map(function(r){
+      return Object.assign({},r,{travellers:_fbArr(r.travellers),links:_fbArr(r.links),sourceNames:_fbArr(r.sourceNames)});
+    }));
+    return {checklist:checklist, days:days, notes:notes, places:places, reservations:reservations};
   }
 
   function _buildPayload(){
@@ -2046,15 +2066,16 @@ var FB = (function(){
       checklist: STATE.checklist,
       days: STATE.days,
       notes: STATE.notes,
-      places: STATE.places
+      places: STATE.places,
+      reservations: STATE.reservations
     };
   }
 
   function _applyPayload(result){
     if(!result) return;
     var norm = _normalize(result);
-    if(!norm.checklist.length && !norm.days.length && !norm.notes.length && !norm.places.length) return;
-    STATE = {checklist:norm.checklist, days:norm.days, notes:norm.notes, places:norm.places};
+    if(!norm.checklist.length && !norm.days.length && !norm.notes.length && !norm.places.length && !norm.reservations.length) return;
+    STATE = {checklist:norm.checklist, days:norm.days, notes:norm.notes, places:norm.places, reservations:norm.reservations};
     saveLocal();
     render();
   }
