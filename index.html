@@ -1034,6 +1034,12 @@ function deletePlace(id){
   STATE.places = STATE.places.filter(function(p){ return p.id!==id; });
   persist();
 }
+function movePlaceDay(id, newDate){
+  var p = STATE.places.find(function(x){ return x.id===id; });
+  if(!p) return;
+  p.date = newDate;
+  persist();
+}
 function startEditPlace(id){
   _editingPlaceId = id;
   renderPlacesList();
@@ -1124,10 +1130,15 @@ function renderPlacesList(){
     var labelHtml = isEditing
       ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
       : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin">(no pin)</span>' : '')+'</div>';
+    var moveHtml = '<select class="chip" onchange="movePlaceDay(\''+p.id+'\',this.value)" title="Move to another day">' +
+      STATE.days.map(function(d){ return '<option value="'+d.date+'"'+(d.date===(p.date||'')?' selected':'')+'>'+shortDayLabel(d.date)+'</option>'; }).join('') +
+      '<option value=""'+((p.date||'')===''?' selected':'')+'>No day</option>' +
+    '</select>';
     return '<div class="place-row" data-id="'+p.id+'">' +
       '<div class="place-body">' +
         labelHtml +
         '<br><a class="place-link" href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' +
+        '<div class="meta-row">'+moveHtml+'</div>' +
       '</div>' +
       (isEditing ? '' : '<button class="plus" onclick="startEditPlace(\''+p.id+'\')" title="Rename">✎</button>') +
       '<button class="del" onclick="deletePlace(\''+p.id+'\')" title="Delete">✕</button>' +
