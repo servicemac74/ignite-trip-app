@@ -272,6 +272,13 @@
   .place-label{font-size:14.5px; font-weight:600; word-break:break-word;}
   .place-nopin{font-size:11px; color:var(--muted); font-weight:400;}
   .place-link{display:inline-block; margin-top:3px; font-size:12.5px; color:var(--accent);}
+
+  .day-bar{display:flex; gap:6px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--bg);}
+  .day-pill{
+    flex:none; border:1px solid var(--line); background:var(--paper); color:var(--ink);
+    border-radius:20px; padding:5px 12px; font-size:12px; cursor:pointer;
+  }
+  .day-pill.on{background:var(--accent); color:var(--accent-ink); border-color:var(--accent);}
 </style>
 </head>
 <body>
@@ -290,6 +297,7 @@
   <button id="tab-days" onclick="setTab('days')">Trip Days</button>
   <button id="tab-cal" onclick="setTab('cal')">Calendar</button>
   <button id="tab-notes" onclick="setTab('notes')">Notes</button>
+  <button id="tab-places" onclick="setTab('places')">Places</button>
 </nav>
 
 <main>
@@ -297,6 +305,7 @@
   <div id="view-days" class="view"></div>
   <div id="view-cal" class="view"></div>
   <div id="view-notes" class="view"></div>
+  <div id="view-places" class="view"></div>
 </main>
 
 <!-- Firebase SDK (compat) -->
@@ -311,7 +320,9 @@
 // STATE = { checklist: [ {id,parentId,text,owner,priority,due,done} ],
 //           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ],
 //           notes:     [ {id,parentId,text} ],
-//           places:    [ {id,label,mapsUrl,lat,lng} ] }
+//           places:    [ {id,label,mapsUrl,lat,lng,date} ] }
+// A place's `date` matches one of days[].date (grouping it under that trip
+// day, on its own page), or "" for a place not tied to any specific day.
 //
 // checklist is a tree flattened into one array: a node's parentId points at
 // its parent's id. Top-level sections (what used to be the fixed "category"
@@ -328,12 +339,15 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // Bump this whenever the STATE shape changes in a way older code can't
 // safely read (the flat-category -> parentId-tree change for checklist
 // items was version 2; turning notes from a flat list into the same
-// parentId-tree shape is version 3; adding the places list is version 4).
+// parentId-tree shape is version 3; adding the places list is version 4;
+// giving each place a `date` so Places can group by trip day is version 5
+// — version 4 code would otherwise drop that field on its next write,
+// since its migratePlaces doesn't know it exists).
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 4;
+var SCHEMA_VERSION = 5;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -415,7 +429,10 @@ function migrateNotes(list){
 
 // Places has no legacy shape to migrate from (it's new as of version 4) —
 // this just defends against a missing/malformed entry so one bad record
-// (e.g. a lat that got written as a string) can't break the map or the list.
+// (e.g. a lat that got written as a string) can't break the map or the
+// list, and gives every place a `date` (version 5) so a place saved before
+// per-day grouping existed just lands in the "No day" bucket instead of
+// vanishing.
 function migratePlaces(list){
   if(!list) return [];
   return list.map(function(p){
@@ -424,7 +441,8 @@ function migratePlaces(list){
       label: p.label || "Place",
       mapsUrl: p.mapsUrl || "",
       lat: (typeof p.lat === "number" && !isNaN(p.lat)) ? p.lat : null,
-      lng: (typeof p.lng === "number" && !isNaN(p.lng)) ? p.lng : null
+      lng: (typeof p.lng === "number" && !isNaN(p.lng)) ? p.lng : null,
+      date: p.date || ""
     };
   });
 }
@@ -901,9 +919,6 @@ function renderNoteNode(node, depth){
 }
 
 function renderNotes(){
-  ensurePlacesSkeleton();
-  renderPlacesList();
-
   var tops = noteChildrenOf(ROOT);
   var html = '<div class="checklist-toolbar">' +
     '<button class="toolbar-btn" onclick="expandAllNotes()">Expand all</button>' +
@@ -912,15 +927,17 @@ function renderNotes(){
   if(!tops.length) html += '<div class="empty-day">Nothing saved yet — add your first note below.</div>';
   html += tops.map(function(n){ return renderNoteNode(n, 1); }).join('');
   html += noteAddRowHtml(ROOT, 'Add a note (door code, wifi password, etc.)…');
-  document.getElementById('notesList').innerHTML = html;
+  document.getElementById('view-notes').innerHTML = html;
 }
 
 // ============================================================================
 // PLACES
-// A flat list of map locations (no hierarchy — a pin is a pin, not a tree)
-// with a mini Leaflet/OpenStreetMap map above it, no API key required. The
-// Places card and the Notes list share the Notes tab but are otherwise
-// independent of each other.
+// Its own tab/page. Places are grouped by trip day (one button per day,
+// matching the Trip Days dates, plus a "No day" bucket) rather than nested
+// in a tree — a pin doesn't have sub-pins, so a day is the one level of
+// grouping that actually matches how this gets used ("what's near me on the
+// 17th?"). Only the selected day's pins show on the map and in the list;
+// adding a place always files it under whichever day is currently selected.
 //
 // Input is deliberately a single field that accepts either shape:
 //   - Paste a Google Maps link -> if it carries coordinates (most full
@@ -939,6 +956,20 @@ function renderNotes(){
 var _placesMap = null;
 var _placesMarkersLayer = null;
 var _editingPlaceId = null;
+var PLACES_NO_DAY = "";
+var _selectedPlacesDate = null;
+
+function placesForDate(dateStr){
+  return STATE.places.filter(function(p){ return (p.date||PLACES_NO_DAY) === dateStr; });
+}
+function shortDayLabel(dateStr){
+  var d = new Date(dateStr+'T00:00:00');
+  return d.toLocaleDateString('en-US', {weekday:'short', month:'numeric', day:'numeric'});
+}
+function selectPlacesDate(dateStr){
+  _selectedPlacesDate = dateStr;
+  renderPlacesPage();
+}
 
 function looksLikeMapsLink(text){
   return /^https?:\/\//i.test(text);
@@ -983,7 +1014,8 @@ function addPlace(){
     label: isLink ? (extractNameFromMapsUrl(raw) || 'New place') : raw,
     mapsUrl: isLink ? raw : buildMapsSearchUrl(raw),
     lat: coords ? coords.lat : null,
-    lng: coords ? coords.lng : null
+    lng: coords ? coords.lng : null,
+    date: _selectedPlacesDate || PLACES_NO_DAY
   };
   STATE.places.push(place);
   persist();
@@ -1017,25 +1049,26 @@ function saveEditPlace(id){
   if(p){ p.label = val; persist(); } else { renderPlacesList(); }
 }
 
-// Builds the Places card's fixed skeleton (map div + list div + add-row)
-// exactly once — everything after that only touches #placesList and the
-// Leaflet map's own marker layer, never the map's own container element,
-// because tearing down and recreating a Leaflet map on every render() (which
-// runs on every single edit anywhere in the app, not just here) would be
-// wasteful and would lose the map's current pan/zoom every time.
+// Builds the Places page's fixed skeleton (day bar + map div + list div +
+// add-row) exactly once — everything after that only touches #placesDayBar,
+// #placesList and the Leaflet map's own marker layer, never the map's own
+// container element, because tearing down and recreating a Leaflet map on
+// every render() (which runs on every single edit anywhere in the app, not
+// just here) would be wasteful and would lose the map's current pan/zoom
+// every time.
 function ensurePlacesSkeleton(){
   if(document.getElementById('placesMap')) return;
-  document.getElementById('view-notes').innerHTML =
+  document.getElementById('view-places').innerHTML =
     '<div class="notes-card">' +
       '<h2 class="places-head">Places</h2>' +
+      '<div id="placesDayBar" class="day-bar"></div>' +
       '<div id="placesMap" class="places-map"></div>' +
       '<div id="placesList"></div>' +
       '<div class="add-row">' +
         '<input type="text" placeholder="Paste a Google Maps link, or type a place/address…" id="new-place" onkeydown="if(event.key===\'Enter\')addPlace()">' +
         '<button onclick="addPlace()">Add</button>' +
       '</div>' +
-    '</div>' +
-    '<div id="notesList"></div>';
+    '</div>';
   initPlacesMap();
 }
 function initPlacesMap(){
@@ -1046,13 +1079,14 @@ function initPlacesMap(){
     attribution:'&copy; OpenStreetMap contributors'
   }).addTo(_placesMap);
   _placesMarkersLayer = L.layerGroup().addTo(_placesMap);
-  updatePlaceMarkers();
 }
+// Only the selected day's pins ever show — "flipping through days" (the day
+// bar) is what changes what the map and list display, not a separate filter.
 function updatePlaceMarkers(){
   if(!_placesMap || !_placesMarkersLayer) return;
   _placesMarkersLayer.clearLayers();
   var pts = [];
-  STATE.places.forEach(function(p){
+  placesForDate(_selectedPlacesDate).forEach(function(p){
     if(typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
     L.marker([p.lat, p.lng]).bindPopup(
       '<b>'+esc(p.label)+'</b><br><a href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>'
@@ -1061,16 +1095,31 @@ function updatePlaceMarkers(){
   });
   if(pts.length === 1) _placesMap.setView(pts[0], 14);
   else if(pts.length > 1) _placesMap.fitBounds(pts, {padding:[24,24]});
+  else _placesMap.setView([37.7749,-122.4194], 11); // nothing pinned for this day — back to the overview
+}
+function renderPlacesDayBar(){
+  var today = todayStr();
+  if(_selectedPlacesDate === null){
+    var match = STATE.days.find(function(d){ return d.date === today; });
+    _selectedPlacesDate = match ? match.date : (STATE.days[0] ? STATE.days[0].date : PLACES_NO_DAY);
+  }
+  var html = STATE.days.map(function(d){
+    var cls = 'day-pill' + (d.date===_selectedPlacesDate ? ' on' : '');
+    return '<button class="'+cls+'" onclick="selectPlacesDate(\''+d.date+'\')">'+shortDayLabel(d.date)+'</button>';
+  }).join('');
+  html += '<button class="day-pill'+(_selectedPlacesDate===PLACES_NO_DAY?' on':'')+'" onclick="selectPlacesDate(\'\')">No day</button>';
+  document.getElementById('placesDayBar').innerHTML = html;
 }
 function renderPlacesList(){
   var el = document.getElementById('placesList');
   if(!el) return;
-  if(!STATE.places.length){
-    el.innerHTML = '<div class="empty-day">No places saved yet — paste a Google Maps link or type an address below.</div>';
+  var list = placesForDate(_selectedPlacesDate);
+  if(!list.length){
+    el.innerHTML = '<div class="empty-day">No places saved for this day yet — paste a Google Maps link or type an address below.</div>';
     updatePlaceMarkers();
     return;
   }
-  el.innerHTML = STATE.places.map(function(p){
+  el.innerHTML = list.map(function(p){
     var isEditing = (_editingPlaceId === p.id);
     var labelHtml = isEditing
       ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
@@ -1085,6 +1134,11 @@ function renderPlacesList(){
     '</div>';
   }).join('');
   updatePlaceMarkers();
+}
+function renderPlacesPage(){
+  ensurePlacesSkeleton();
+  renderPlacesDayBar();
+  renderPlacesList();
 }
 function addNoteChild(parentId){
   var input = document.getElementById('new-note-child-'+parentId);
@@ -1113,7 +1167,7 @@ function editNoteText(id, value){
   persist();
 }
 
-function render(){ renderChecklist(); renderDays(); renderCalendar(); renderNotes(); }
+function render(){ renderChecklist(); renderDays(); renderCalendar(); renderNotes(); renderPlacesPage(); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
@@ -1241,14 +1295,14 @@ function addEntry(date){
 // TABS
 // ============================================================================
 function setTab(which){
-  ['checklist','days','cal','notes'].forEach(function(w){
+  ['checklist','days','cal','notes','places'].forEach(function(w){
     document.getElementById('tab-'+w).classList.toggle('on', w===which);
     document.getElementById('view-'+w).classList.toggle('on', w===which);
   });
-  // The Places map is created once, while the Notes tab may still be hidden
+  // The Places map is created once, while its tab may still be hidden
   // (display:none gives it 0 size), so Leaflet needs a nudge to recompute
   // its size and reload tiles the moment the tab actually becomes visible.
-  if(which === 'notes' && _placesMap){
+  if(which === 'places' && _placesMap){
     setTimeout(function(){ _placesMap.invalidateSize(); }, 0);
   }
 }
