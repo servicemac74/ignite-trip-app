@@ -49,6 +49,20 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 
 **Conference sessions and vineyards:** both are available in the type filter and each place's type dropdown, independently of the Personal/Conference category filter. Use the existing day, time, place name/address, and Love it/Or not controls to plan a session. The app's `time` field and time-of-day bucketing remain timezone-naive (plain "H:MM AM/PM" strings, no timezone attached). Enter Pacific start times as plain time values; automatic timezone handling is deferred.
 
+## Flights & Stays
+
+Flights & Stays is a browser-only reservation notebook, with one record per flight or hotel stay and traveler rows inside shared flights. It has All days / trip-date views, explicit origin/destination timezone labels, departure/arrival or check-in/checkout colors, next-day arrival labels, copyable references, notes and links. Hotel stays appear on dates from check-in through checkout. No Personal/Conference, preference or type filters apply.
+
+**Privacy boundary:** all reservation data is outside STATE, in localStorage key ignite-private-reservations-v1 with its own version: 1. It is not encrypted, is not uploaded to Firebase, and does not sync to another browser or phone. Existing checked-in database rules allow public access, so booking references and source documents must not be put in the Git repository, STATE, Places notes, or Firebase. Original PDFs/photos stay outside the site. Protect the device and retain the original confirmations; clearing browser storage removes these records.
+
+All reservation writes use persist("reservations", records), which validates and writes the separate local store before changing the in-memory records. This branch never calls FB.scheduleWrite and never changes the shared payload. Shared-page renders preserve an open reservation-editor/import draft.
+
+Import reservation data accepts JSON {version:1, records:[...]}, previews the reservations, then explicitly saves locally. Imports merge the same flight (provider, flight number, route, departure date) or hotel (name, address, dates), retaining separate travelers, references and source names. Add flight / Add hotel stay and Edit reservation provide ordinary form editing. Unknown dates/times remain blank and timezone labels are not inferred by the app. Times are not globally converted.
+
+Records contain id, kind (flight/hotel), title, provider, number, from/to, start/end {date,time,zone}, address, phone, room, reference, agencyReference, travellers [{name,seat,confirmation,ticket,fare,baggage,cost}], paid/due/total/currency, cancellation, notes, links [{label,url}], sourceNames. Source filenames are reference labels, not uploaded attachments. No personal booking data is seeded in source code.
+
+To validate: check shared payload exclusion; private save/reload; duplicate import merging; traveler-specific seats/codes; date filtering including overnight arrivals and hotel checkout; timezone/time-color labels; malformed import and failed local storage. For data entry, use the live UI, not direct database writes.
+
 ## Running and validating locally
 
 No install step. Two ways to run it:
