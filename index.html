@@ -10,7 +10,7 @@
     --bg:#f6f5f2; --paper:#ffffff; --ink:#1f2420; --muted:#767f76;
     --line:#e2e0da; --accent:#2f6b4f; --accent-ink:#ffffff;
     --warn:#b4452f; --am:#c98a2c; --ok:#2f6b4f; --chip:#eef0ea;
-    --love:#d6336c; --pass:#b9c2bc;
+    --love:#d6336c; --pass:#b9c2bc; --not-rated:#547ea8;
     --tod-morning:#e0a52e; --tod-afternoon:#2f8fd1; --tod-evening:#d1495b; --tod-night:#6a3fa0; --tod-none:#9aa39d;
   }
   *{box-sizing:border-box;}
@@ -341,7 +341,7 @@
   <div class="sub">San Francisco · Mon Nov 16 – Sun Nov 22</div>
   <div class="sync" id="syncBadge" data-state="offline">
     <span class="dot"></span><span id="syncLabel">offline</span>
-    <span style="color:var(--muted);">· build 2026-11-09-2</span>
+    <span style="color:var(--muted);">· build 2026-11-12-2</span>
   </div>
 </header>
 
@@ -412,12 +412,13 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // `ptype` is version 7 — each of those version bumps exists because an
 // older build's migratePlaces doesn't know the new field and would
 // silently drop it on its next write. Version 8 adds address, notes and
-// references (label/url/creator) to Places.
+// references (label/url/creator) to Places. Version 9 adds the explicit
+// notRated tier; older clients cannot display that tier and must reload.
 // The Firebase sync module compares this against whatever version is
 // already saved: if Firebase has a newer version than this build
 // understands, this client is stale and gets blocked from writing (and
 // editing) instead of silently overwriting newer data with older data.
-var SCHEMA_VERSION = 8;
+var SCHEMA_VERSION = 9;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -1067,7 +1068,7 @@ var _selectedPlacesDate = null;
 var _selectedCategory = "personal";
 var _selectedPtype = ""; // "" = all types
 var _colorMode = "tier"; // "tier" (by preference) or "time" (by time of day)
-var TIERS = [{key:"love", label:"❤️ Love it"}, {key:"pass", label:"🤷 Or not"}];
+var TIERS = [{key:"notRated", label:"○ Not rated"}, {key:"love", label:"❤️ Love it"}, {key:"pass", label:"🤷 Or not"}];
 var PLACE_TYPES = [
   {key:"restaurant", label:"🍽️ Restaurant"},
   {key:"site", label:"🏛️ Site"},
@@ -1128,7 +1129,7 @@ function timeOfDayEmoji(bucket){
   return {morning:"🌅", afternoon:"☀️", evening:"🌇", night:"🌙", none:"📍"}[bucket];
 }
 function placeColor(p){
-  if(_colorMode === "tier") return (p.tier === "love") ? "var(--love)" : "var(--pass)";
+  if(_colorMode === "tier") return p.tier === "notRated" ? "var(--not-rated)" : ((p.tier === "love") ? "var(--love)" : "var(--pass)");
   var bucket = timeOfDayBucket(p.time);
   return {morning:"var(--tod-morning)", afternoon:"var(--tod-afternoon)", evening:"var(--tod-evening)", night:"var(--tod-night)", none:"var(--tod-none)"}[bucket];
 }
@@ -1216,7 +1217,7 @@ function addPlace(){
     lng: coords ? coords.lng : null,
     date: _selectedPlacesDate === PLACES_ALL_DAYS ? PLACES_NO_DAY : (_selectedPlacesDate || PLACES_NO_DAY),
     category: _selectedCategory,
-    tier: "pass",
+    tier: "notRated",
     time: "",
     ptype: "",
     address: "",
@@ -1455,7 +1456,7 @@ function renderPlaceRow(p){
   var labelHtml = isEditing
     ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
     : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin" title="Use Edit details & links to add or correct the street address">(location not confirmed)</span>' : '')+'</div>';
-  var tierHtml = '<select class="chip" onchange="setPlaceTier(\''+p.id+'\',this.value)" title="Love it or not">' +
+  var tierHtml = '<select class="chip" onchange="setPlaceTier(\''+p.id+'\',this.value)" title="Preference">' +
     TIERS.map(function(t){ return '<option value="'+t.key+'"'+(t.key===(p.tier||'pass')?' selected':'')+'>'+t.label+'</option>'; }).join('') +
   '</select>';
   var typeHtml = '<select class="chip" onchange="setPlaceType(\''+p.id+'\',this.value)" title="Type">' +
@@ -1473,7 +1474,7 @@ function renderPlaceRow(p){
     '<select onchange="editPlaceTime(\''+p.id+'\',\'ap\',this.value)">' + AMPM.map(function(ap){return '<option value="'+ap+'"'+(ap===pt.ap?' selected':'')+'>'+ap+'</option>';}).join('') + '</select>' +
   '</span>';
   return '<div class="place-row" data-id="'+p.id+'" style="border-left:4px solid '+placeColor(p)+';">' +
-    '<span class="drag-handle" title="Drag to Love it / Or not" onpointerdown="tierDragStart(event,\''+p.id+'\')">⠿</span>' +
+    '<span class="drag-handle" title="Drag to a preference section" onpointerdown="tierDragStart(event,\''+p.id+'\')">⠿</span>' +
     '<div class="place-body">' +
       labelHtml +
       '<br><a class="place-link" href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' +

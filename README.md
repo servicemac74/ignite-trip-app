@@ -11,7 +11,7 @@ If you are an AI coding assistant picking this repo up with no memory of prior s
 - **Persistence is two-layer:**
   - `localStorage` (key `ignite-trip-2026-v1`) — always on, works with no network, keeps the app usable offline.
   - **Firebase Realtime Database** (project `ignite-trip-app`, path `sessions/ignite-trip`, whole `STATE` stored as one JSON value at that path) — syncs across devices when online. Entirely optional at the code level: if the Firebase SDK fails to load or the network is down, the app still works from `localStorage` alone.
-- **Schema versioning guards against data loss.** Every write tags the payload with `SCHEMA_VERSION` (currently `8`, declared near the top of the script). If a client ever sees a *higher* version already saved than it understands, it blocks all editing with a full-screen "out of date, reload" message instead of silently overwriting newer data with an older shape. See `AGENTS.md` for the rule this implies about changing the data model.
+- **Schema versioning guards against data loss.** Every write tags the payload with `SCHEMA_VERSION` (currently `9`, declared near the top of the script). If a client ever sees a *higher* version already saved than it understands, it blocks all editing with a full-screen "out of date, reload" message instead of silently overwriting newer data with an older shape. See `AGENTS.md` for the rule this implies about changing the data model.
 - **Hosting is GitHub Pages**, not Firebase Hosting. `firebase.json`/`.firebaserc`/`database.rules.json` configure only the Realtime Database (rules deploy), not a hosted site — see **Deployment**.
 
 ## Data model: Places (the newest, most actively-changing part)
@@ -26,7 +26,7 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 | `lat` / `lng` | coordinates, numeric or `null` if geocoding hasn't resolved the place yet |
 | `date` | which trip day this belongs to (`""` = "No day" bucket) |
 | `category` | `"personal"` or `"conference"` — a second, independent top-level filter so the same app can plan the family trip and a conference schedule at once |
-| `tier` | `"love"` or `"pass"` — set via a dropdown on the card, or by dragging the card between the two tier sections |
+| `tier` | `"notRated"`, `"love"` or `"pass"` — set via a dropdown on the card, or by dragging the card between the two tier sections |
 | `time` | optional `"H:MM AM/PM"` string, same picker Trip Days uses |
 | address | street address; editing retries geocoding and updates Maps link |
 | notes | free text for highlights, duration, verified details and uncertainties |
@@ -34,6 +34,8 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 | `ptype` | one of `restaurant` / `site` / `touristTrap` / `logistics` / `conferenceSession` / `vineyard`, or `""` if untagged |
 
 **Filters** (`_selectedPlacesDate`, `_selectedCategory`, `_selectedPtype`) are independent and all apply at once — see `placesForView()`. A newly-added place is filed under whichever day + category is currently selected (so there's no separate day/category picker in the quick-add form); type is the one field left untagged on add and set afterward from the card.
+
+**Preferences:** new places start as Not rated (neutral blue); existing Love it / Or not values are preserved. Schema 9 prevents older clients from silently hiding Not rated places. The preference dropdown and drag sections support all three values.
 
 **All days:** includes dated and undated places in the list and map, respecting category/type filters. No day shows only unscheduled places. Quick-add in All days creates an undated place. Places without coordinates remain in the list.
 
