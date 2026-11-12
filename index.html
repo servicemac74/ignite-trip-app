@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Ignite Trip 2026</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root{
     --bg:#f6f5f2; --paper:#ffffff; --ink:#1f2420; --muted:#767f76;
@@ -255,6 +256,22 @@
     flex:1; border:1px solid var(--line); border-radius:8px; padding:6px 8px;
     font-size:14.5px; min-width:0;
   }
+
+  .places-head{
+    margin:0; padding:10px 14px; font-size:13px; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--muted); background:var(--chip);
+    border-bottom:1px solid var(--line);
+  }
+  .places-map{height:200px; border-bottom:1px solid var(--line);}
+  .place-row{
+    display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
+    align-items:flex-start;
+  }
+  .place-row:last-child{border-bottom:none;}
+  .place-body{flex:1; min-width:0;}
+  .place-label{font-size:14.5px; font-weight:600; word-break:break-word;}
+  .place-nopin{font-size:11px; color:var(--muted); font-weight:400;}
+  .place-link{display:inline-block; margin-top:3px; font-size:12.5px; color:var(--accent);}
 </style>
 </head>
 <body>
@@ -285,12 +302,16 @@
 <!-- Firebase SDK (compat) -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<!-- Leaflet (free, no API key — OpenStreetMap tiles) for the Places mini-map -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
 // ============================================================================
 // DATA MODEL
 // STATE = { checklist: [ {id,parentId,text,owner,priority,due,done} ],
-//           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ] }
+//           days:      [ {date,label,entries:[{id,time,title,owner,notes}]} ],
+//           notes:     [ {id,parentId,text} ],
+//           places:    [ {id,label,mapsUrl,lat,lng} ] }
 //
 // checklist is a tree flattened into one array: a node's parentId points at
 // its parent's id. Top-level sections (what used to be the fixed "category"
@@ -307,12 +328,12 @@ var LEGACY_CATEGORIES = ["Pack","Clean house","Groceries","Bus / school coordina
 // Bump this whenever the STATE shape changes in a way older code can't
 // safely read (the flat-category -> parentId-tree change for checklist
 // items was version 2; turning notes from a flat list into the same
-// parentId-tree shape is version 3). The Firebase sync module compares
-// this against whatever version is already saved: if Firebase has a newer
-// version than this build understands, this client is stale and gets
-// blocked from writing (and editing) instead of silently overwriting newer
-// data with older data.
-var SCHEMA_VERSION = 3;
+// parentId-tree shape is version 3; adding the places list is version 4).
+// The Firebase sync module compares this against whatever version is
+// already saved: if Firebase has a newer version than this build
+// understands, this client is stale and gets blocked from writing (and
+// editing) instead of silently overwriting newer data with older data.
+var SCHEMA_VERSION = 4;
 var OWNERS_CHECKLIST = ["Chris","Inez","Chris/Inez"];
 var OWNERS_DAY = ["Chris","Inez","Both"];
 var HOURS = ["--","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -353,7 +374,8 @@ function defaultState(){
         {id:uid("en"), time:"5:16 AM ET", title:"Arrive ATL", owner:"Both", notes:""}
       ]}
     ],
-    notes: []
+    notes: [],
+    places: []
   };
 }
 
@@ -391,6 +413,22 @@ function migrateNotes(list){
   return list.map(function(n){ return {id:n.id, parentId:ROOT, text:n.text}; });
 }
 
+// Places has no legacy shape to migrate from (it's new as of version 4) —
+// this just defends against a missing/malformed entry so one bad record
+// (e.g. a lat that got written as a string) can't break the map or the list.
+function migratePlaces(list){
+  if(!list) return [];
+  return list.map(function(p){
+    return {
+      id: p.id || uid("pl"),
+      label: p.label || "Place",
+      mapsUrl: p.mapsUrl || "",
+      lat: (typeof p.lat === "number" && !isNaN(p.lat)) ? p.lat : null,
+      lng: (typeof p.lng === "number" && !isNaN(p.lng)) ? p.lng : null
+    };
+  });
+}
+
 var STATE = null;
 var LS_KEY = "ignite-trip-2026-v1";
 
@@ -401,6 +439,7 @@ function loadLocal(){
       var parsed = JSON.parse(raw);
       if(parsed && parsed.checklist) parsed.checklist = migrateChecklist(parsed.checklist);
       if(parsed && parsed.notes) parsed.notes = migrateNotes(parsed.notes);
+      if(parsed && parsed.places) parsed.places = migratePlaces(parsed.places);
       return parsed;
     }
   }catch(e){}
@@ -412,6 +451,7 @@ function saveLocal(){
 
 STATE = loadLocal() || defaultState();
 STATE.notes = STATE.notes || []; // older saved data predates the Notes tab
+STATE.places = STATE.places || []; // older saved data predates the Places section
 
 // ============================================================================
 // RENDER
@@ -861,6 +901,9 @@ function renderNoteNode(node, depth){
 }
 
 function renderNotes(){
+  ensurePlacesSkeleton();
+  renderPlacesList();
+
   var tops = noteChildrenOf(ROOT);
   var html = '<div class="checklist-toolbar">' +
     '<button class="toolbar-btn" onclick="expandAllNotes()">Expand all</button>' +
@@ -869,7 +912,179 @@ function renderNotes(){
   if(!tops.length) html += '<div class="empty-day">Nothing saved yet — add your first note below.</div>';
   html += tops.map(function(n){ return renderNoteNode(n, 1); }).join('');
   html += noteAddRowHtml(ROOT, 'Add a note (door code, wifi password, etc.)…');
-  document.getElementById('view-notes').innerHTML = html;
+  document.getElementById('notesList').innerHTML = html;
+}
+
+// ============================================================================
+// PLACES
+// A flat list of map locations (no hierarchy — a pin is a pin, not a tree)
+// with a mini Leaflet/OpenStreetMap map above it, no API key required. The
+// Places card and the Notes list share the Notes tab but are otherwise
+// independent of each other.
+//
+// Input is deliberately a single field that accepts either shape:
+//   - Paste a Google Maps link -> if it carries coordinates (most full
+//     "https://www.google.com/maps/place/.../@lat,lng,..." links, and any
+//     "q=lat,lng" link), the pin goes straight on the map and the original
+//     link is kept as the "Open in Google Maps" deep link. A shortened link
+//     (maps.app.goo.gl/...) has no coordinates in the URL text itself (it
+//     only resolves them after a server redirect this page can't follow),
+//     so it's still saved and still opens correctly, just without a pin.
+//   - Type a place name or address -> saved immediately with a Google Maps
+//     search link built from that text (works as a deep link regardless of
+//     whether geocoding below succeeds), then geocoded in the background via
+//     Nominatim (OpenStreetMap's free, no-API-key geocoder) to get a pin.
+// Either way, nothing about adding a place ever blocks on the network call.
+// ============================================================================
+var _placesMap = null;
+var _placesMarkersLayer = null;
+var _editingPlaceId = null;
+
+function looksLikeMapsLink(text){
+  return /^https?:\/\//i.test(text);
+}
+
+function extractLatLngFromMapsUrl(text){
+  var m = /@(-?\d+\.\d+),(-?\d+\.\d+)/.exec(text);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  m = /[?&](?:q|query|destination)=(-?\d+\.\d+),(-?\d+\.\d+)/.exec(text);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  m = /^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$/.exec(text);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  return null;
+}
+function extractNameFromMapsUrl(text){
+  var m = /\/maps\/place\/([^\/@]+)/.exec(text);
+  if(!m) return null;
+  try{ return decodeURIComponent(m[1]).replace(/\+/g,' '); }catch(e){ return m[1].replace(/\+/g,' '); }
+}
+function buildMapsSearchUrl(query){
+  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query);
+}
+function geocodePlace(query){
+  var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(query);
+  return fetch(url).then(function(r){ return r.ok ? r.json() : []; })
+    .then(function(results){
+      if(results && results.length) return {lat:parseFloat(results[0].lat), lng:parseFloat(results[0].lon)};
+      return null;
+    }).catch(function(){ return null; });
+}
+
+function addPlace(){
+  var input = document.getElementById('new-place');
+  var raw = (input.value||'').trim();
+  if(!raw) return;
+  input.value = '';
+
+  var isLink = looksLikeMapsLink(raw);
+  var coords = extractLatLngFromMapsUrl(raw);
+  var place = {
+    id: uid('pl'),
+    label: isLink ? (extractNameFromMapsUrl(raw) || 'New place') : raw,
+    mapsUrl: isLink ? raw : buildMapsSearchUrl(raw),
+    lat: coords ? coords.lat : null,
+    lng: coords ? coords.lng : null
+  };
+  STATE.places.push(place);
+  persist();
+
+  if(!isLink && !coords){
+    geocodePlace(raw).then(function(found){
+      if(!found) return;
+      var p = STATE.places.find(function(x){ return x.id===place.id; });
+      if(!p) return;
+      p.lat = found.lat; p.lng = found.lng;
+      persist();
+    });
+  }
+}
+function deletePlace(id){
+  STATE.places = STATE.places.filter(function(p){ return p.id!==id; });
+  persist();
+}
+function startEditPlace(id){
+  _editingPlaceId = id;
+  renderPlacesList();
+  var el = document.getElementById('place-edit-'+id);
+  if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+function saveEditPlace(id){
+  var el = document.getElementById('place-edit-'+id);
+  if(!el) return;
+  var val = el.value;
+  _editingPlaceId = null;
+  var p = STATE.places.find(function(x){ return x.id===id; });
+  if(p){ p.label = val; persist(); } else { renderPlacesList(); }
+}
+
+// Builds the Places card's fixed skeleton (map div + list div + add-row)
+// exactly once — everything after that only touches #placesList and the
+// Leaflet map's own marker layer, never the map's own container element,
+// because tearing down and recreating a Leaflet map on every render() (which
+// runs on every single edit anywhere in the app, not just here) would be
+// wasteful and would lose the map's current pan/zoom every time.
+function ensurePlacesSkeleton(){
+  if(document.getElementById('placesMap')) return;
+  document.getElementById('view-notes').innerHTML =
+    '<div class="notes-card">' +
+      '<h2 class="places-head">Places</h2>' +
+      '<div id="placesMap" class="places-map"></div>' +
+      '<div id="placesList"></div>' +
+      '<div class="add-row">' +
+        '<input type="text" placeholder="Paste a Google Maps link, or type a place/address…" id="new-place" onkeydown="if(event.key===\'Enter\')addPlace()">' +
+        '<button onclick="addPlace()">Add</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="notesList"></div>';
+  initPlacesMap();
+}
+function initPlacesMap(){
+  if(typeof L === 'undefined') return; // Leaflet failed to load — list/links still work without it
+  _placesMap = L.map('placesMap', {zoomControl:true}).setView([37.7749,-122.4194], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19,
+    attribution:'&copy; OpenStreetMap contributors'
+  }).addTo(_placesMap);
+  _placesMarkersLayer = L.layerGroup().addTo(_placesMap);
+  updatePlaceMarkers();
+}
+function updatePlaceMarkers(){
+  if(!_placesMap || !_placesMarkersLayer) return;
+  _placesMarkersLayer.clearLayers();
+  var pts = [];
+  STATE.places.forEach(function(p){
+    if(typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
+    L.marker([p.lat, p.lng]).bindPopup(
+      '<b>'+esc(p.label)+'</b><br><a href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>'
+    ).addTo(_placesMarkersLayer);
+    pts.push([p.lat, p.lng]);
+  });
+  if(pts.length === 1) _placesMap.setView(pts[0], 14);
+  else if(pts.length > 1) _placesMap.fitBounds(pts, {padding:[24,24]});
+}
+function renderPlacesList(){
+  var el = document.getElementById('placesList');
+  if(!el) return;
+  if(!STATE.places.length){
+    el.innerHTML = '<div class="empty-day">No places saved yet — paste a Google Maps link or type an address below.</div>';
+    updatePlaceMarkers();
+    return;
+  }
+  el.innerHTML = STATE.places.map(function(p){
+    var isEditing = (_editingPlaceId === p.id);
+    var labelHtml = isEditing
+      ? '<input type="text" class="note-edit-input" id="place-edit-'+p.id+'" value="'+esc(p.label)+'" onkeydown="if(event.key===\'Enter\')saveEditPlace(\''+p.id+'\')" onblur="saveEditPlace(\''+p.id+'\')">'
+      : '<div class="place-label">'+esc(p.label)+(p.lat==null ? ' <span class="place-nopin">(no pin)</span>' : '')+'</div>';
+    return '<div class="place-row" data-id="'+p.id+'">' +
+      '<div class="place-body">' +
+        labelHtml +
+        '<br><a class="place-link" href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' +
+      '</div>' +
+      (isEditing ? '' : '<button class="plus" onclick="startEditPlace(\''+p.id+'\')" title="Rename">✎</button>') +
+      '<button class="del" onclick="deletePlace(\''+p.id+'\')" title="Delete">✕</button>' +
+    '</div>';
+  }).join('');
+  updatePlaceMarkers();
 }
 function addNoteChild(parentId){
   var input = document.getElementById('new-note-child-'+parentId);
@@ -1030,6 +1245,12 @@ function setTab(which){
     document.getElementById('tab-'+w).classList.toggle('on', w===which);
     document.getElementById('view-'+w).classList.toggle('on', w===which);
   });
+  // The Places map is created once, while the Notes tab may still be hidden
+  // (display:none gives it 0 size), so Leaflet needs a nudge to recompute
+  // its size and reload tiles the moment the tab actually becomes visible.
+  if(which === 'notes' && _placesMap){
+    setTimeout(function(){ _placesMap.invalidateSize(); }, 0);
+  }
 }
 
 render();
@@ -1076,7 +1297,8 @@ var FB = (function(){
     var checklist = migrateChecklist(_fbArr(data.checklist));
     var days = _fbArr(data.days).map(function(d){ d.entries = _fbArr(d.entries); return d; });
     var notes = migrateNotes(_fbArr(data.notes));
-    return {checklist:checklist, days:days, notes:notes};
+    var places = migratePlaces(_fbArr(data.places));
+    return {checklist:checklist, days:days, notes:notes, places:places};
   }
 
   function _buildPayload(){
@@ -1086,15 +1308,16 @@ var FB = (function(){
       savedAt: new Date().toISOString(),
       checklist: STATE.checklist,
       days: STATE.days,
-      notes: STATE.notes
+      notes: STATE.notes,
+      places: STATE.places
     };
   }
 
   function _applyPayload(result){
     if(!result) return;
     var norm = _normalize(result);
-    if(!norm.checklist.length && !norm.days.length && !norm.notes.length) return;
-    STATE = {checklist:norm.checklist, days:norm.days, notes:norm.notes};
+    if(!norm.checklist.length && !norm.days.length && !norm.notes.length && !norm.places.length) return;
+    STATE = {checklist:norm.checklist, days:norm.days, notes:norm.notes, places:norm.places};
     saveLocal();
     render();
   }
