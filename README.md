@@ -28,7 +28,7 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 | `category` | `"personal"` or `"conference"` — a second, independent top-level filter so the same app can plan the family trip and a conference schedule at once |
 | `tier` | `"love"` or `"pass"` — set via a dropdown on the card, or by dragging the card between the two tier sections |
 | `time` | optional `"H:MM AM/PM"` string, same picker Trip Days uses |
-| `ptype` | one of `restaurant` / `site` / `touristTrap` / `logistics`, or `""` if untagged |
+| `ptype` | one of `restaurant` / `site` / `touristTrap` / `logistics` / `conferenceSession` / `vineyard`, or `""` if untagged |
 
 **Filters** (`_selectedPlacesDate`, `_selectedCategory`, `_selectedPtype`) are independent and all apply at once — see `placesForView()`. A newly-added place is filed under whichever day + category is currently selected (so there's no separate day/category picker in the quick-add form); type is the one field left untagged on add and set afterward from the card.
 
@@ -36,10 +36,7 @@ Each entry in `STATE.places` is a flat object (see `migratePlaces()` in `index.h
 
 **Geocoding:** pasting a full Google Maps link with embedded coordinates (`@lat,lng` or `q=lat,lng`) works instantly with no network call. Typing a plain address, or pasting a *shortened* Google "Share" link (`maps.app.goo.gl/...`, which never carries coordinates and can't be resolved client-side — a CORS limitation, not a bug in this app), falls back to free Nominatim (OpenStreetMap) geocoding with a progressive-retry fallback (`geocodeWithFallback`/`buildGeocodeAttempts`) for addresses its parser initially misses. **The fix for a dead-end shortened link is renaming the place** to its real name/address — renaming retries geocoding, same as adding a new place.
 
-**Planned next (not yet built — documenting the ask, not implementing it in this pass):**
-- Two new place types: `conferenceSession` and `vineyard`, added to the existing `restaurant`/`site`/`touristTrap`/`logistics` set in `PLACE_TYPES`.
-- The existing Personal/Conference category filter is to be preserved as-is alongside the new types — these are additive, not a replacement.
-- A way to enter a conference session's date, **Pacific time** start time, venue/address, and Love it/Or not preference. The app's `time` field and time-of-day bucketing are currently timezone-naive (plain "H:MM AM/PM" strings, no timezone attached) — **automatic timezone handling is explicitly deferred**; a Pacific start time can be entered as a plain time value for now, same as everything else.
+**Conference sessions and vineyards:** both are available in the type filter and each place's type dropdown, independently of the Personal/Conference category filter. Use the existing day, time, place name/address, and Love it/Or not controls to plan a session. The app's `time` field and time-of-day bucketing remain timezone-naive (plain "H:MM AM/PM" strings, no timezone attached). Enter Pacific start times as plain time values; automatic timezone handling is deferred.
 
 ## Running and validating locally
 

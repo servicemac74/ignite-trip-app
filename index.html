@@ -378,7 +378,8 @@
 // drives the pin color when the toggle is set to "by time of day" instead,
 // with the icon showing the other signal (time as an emoji glyph when
 // color is spent on tier; nothing extra when color is already time).
-// `ptype` is "restaurant"/"site"/"touristTrap"/"logistics" (or "" if
+// `ptype` is "restaurant"/"site"/"touristTrap"/"logistics"/
+// "conferenceSession"/"vineyard" (or "" if
 // untagged) — a second, independent filter alongside category/day, so
 // "show me just the restaurants on the 17th" narrows the same view.
 //
@@ -1041,7 +1042,9 @@ var PLACE_TYPES = [
   {key:"restaurant", label:"🍽️ Restaurant"},
   {key:"site", label:"🏛️ Site"},
   {key:"touristTrap", label:"🎡 Tourist Trap"},
-  {key:"logistics", label:"🧳 Logistics"}
+  {key:"logistics", label:"🧳 Logistics"},
+  {key:"conferenceSession", label:"🎤 Conference Session"},
+  {key:"vineyard", label:"🍇 Vineyard"}
 ];
 
 // The current day + category + type selection together decide what's
