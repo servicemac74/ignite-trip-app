@@ -264,7 +264,34 @@
     letter-spacing:.04em; color:var(--muted); background:var(--chip);
     border-bottom:1px solid var(--line);
   }
-  .places-map{height:200px; border-bottom:1px solid var(--line);}
+  .places-map{height:56vh;height:56svh;min-height:380px;max-height:600px;border-bottom:1px solid var(--line);}
+  .places-map.expanded{height:78vh;height:78svh;min-height:420px;max-height:900px;}
+  .places-map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;color:var(--muted);}
+  .places-map-toolbar button{padding:7px 10px;flex-shrink:0;}
+  .places-map-status{font-size:13px;padding:6px 12px;color:var(--accent);}
+  .places-map-status:empty{display:none;}
+  .place-rich-popup .leaflet-popup-content{margin:14px 16px;width:auto;max-width:calc(100vw - 80px);}
+  .place-map-popup{display:flex;flex-direction:column;max-height:var(--place-popup-max,356px);overflow:hidden;overflow-wrap:anywhere;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);}
+  .place-popup-heading{display:grid;gap:5px;padding:0 16px 8px 0;flex-shrink:0;}
+  .place-popup-heading strong{font-size:15px;}
+  .place-popup-form{display:flex;flex-direction:column;min-height:0;margin:0;}
+  .place-popup-body{min-height:0;max-height:var(--place-popup-body-max,230px);overflow-y:auto;overscroll-behavior:contain;padding:2px 6px 8px 0;scrollbar-gutter:stable;}
+  .place-popup-body label{display:block;min-width:0;margin:8px 0 0;}
+  .place-popup-body input,.place-popup-body select,.place-popup-body textarea{width:100%;box-sizing:border-box;min-height:38px;padding:6px;font-size:16px;border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);}
+  .place-popup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px;}
+  .place-popup-time{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:10px 0;padding:0;border:0;min-width:0;}
+  .place-popup-time legend{padding:0;}
+  .place-popup-time label{margin:0;}
+  .place-popup-address{margin:0 0 8px!important;}
+  .place-popup-links{display:grid;gap:6px;margin:6px 0;}
+  .place-popup-links span{font-size:12px;color:var(--muted);}
+  .place-popup-notes,.place-popup-advanced{margin:10px 0;}
+  .place-popup-advanced summary,.place-popup-notes summary{cursor:pointer;font-weight:600;}
+  .place-popup-footer{flex-shrink:0;padding-top:8px;border-top:1px solid var(--line);background:var(--paper);}
+  .place-popup-footer button{min-height:40px;padding:7px 10px;}
+  .place-popup-status{font-size:12px;line-height:1.3;padding-top:4px;}
+  .place-popup-body .place-reference-edit{padding:6px;margin:8px 0;}
+  @media(max-width:600px){.places-map{height:60vh;height:60svh;min-height:360px;max-height:520px;}.places-map.expanded{height:78vh;height:78svh;min-height:420px;max-height:900px;}}
   .place-row{
     display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line);
     align-items:flex-start;
@@ -359,7 +386,7 @@
   <div class="sub">San Francisco · Mon Nov 16 – Sun Nov 22</div>
   <div class="sync" id="syncBadge" data-state="offline">
     <span class="dot"></span><span id="syncLabel">offline</span>
-    <span style="color:var(--muted);">· build 2026-11-12-5</span>
+    <span style="color:var(--muted);">· build 2026-11-14-1</span>
   </div>
 </header>
 
@@ -1088,6 +1115,10 @@ function renderNotes(){
 // ============================================================================
 var _placesMap = null;
 var _placesMarkersLayer = null;
+var _placeMarkerEntries = Object.create(null);
+var _placesMapViewKey = null;
+var _placesMapExpanded = false;
+var _placePopupSizeKey = null;
 var _editingPlaceId = null;
 var PLACES_NO_DAY = "";
 var PLACES_ALL_DAYS = "all";
@@ -1402,7 +1433,9 @@ function ensurePlacesSkeleton(){
       '<div id="placesPtypeBar" class="ptype-bar"></div>' +
       '<div id="placesDayBar" class="day-bar"></div>' +
       '<div id="placesColorModeBar" class="seg-toggle"></div>' +
-      '<div id="placesMap" class="places-map"></div>' +
+      '<div class="places-map-toolbar"><span>Click a pin to view or edit its card</span><button type="button" aria-expanded="false" onclick="togglePlacesMapSize(this)">Expand map</button></div>' +
+      '<div id="placesMap" class="places-map" aria-label="Places map"></div>' +
+      '<div id="placesMapStatus" class="places-map-status" role="status" aria-live="polite"></div>' +
       '<div id="placesList"></div>' +
       '<div class="add-row">' +
         '<input type="text" placeholder="Paste a Google Maps link, or type a place/address…" id="new-place" onkeydown="if(event.key===\'Enter\')addPlace()">' +
@@ -1442,6 +1475,10 @@ function initPlacesMap(){
     attribution:'&copy; OpenStreetMap contributors'
   }).addTo(_placesMap);
   _placesMarkersLayer = L.layerGroup().addTo(_placesMap);
+  _placesMap.on('resize', updatePlacePopupSizing);
+  if(typeof ResizeObserver !== 'undefined'){
+    new ResizeObserver(function(){_placesMap.invalidateSize({pan:false});updatePlacePopupSizing();}).observe(document.getElementById('placesMap'));
+  }
 }
 // A plain colored teardrop built from CSS (no external marker-icon image),
 // so it can take any exact color the tier/time scheme calls for rather
@@ -1457,21 +1494,206 @@ function placeMarkerIcon(p){
 }
 // Only the selected day+category's pins ever show — the filters above are
 // what changes what the map and list display, not a separate control here.
-function updatePlaceMarkers(){
-  if(!_placesMap || !_placesMarkersLayer) return;
-  _placesMarkersLayer.clearLayers();
-  var pts = [];
-  placesForView().forEach(function(p){
-    if(typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
-    L.marker([p.lat, p.lng], {icon: placeMarkerIcon(p)}).bindPopup(
-      '<b>'+esc(p.label)+'</b><br><a href="'+esc(p.mapsUrl)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>'
-    ).addTo(_placesMarkersLayer);
-    pts.push([p.lat, p.lng]);
-  });
-  if(pts.length === 1) _placesMap.setView(pts[0], 14);
-  else if(pts.length > 1) _placesMap.fitBounds(pts, {padding:[24,24]});
-  else _placesMap.setView([37.7749,-122.4194], 11); // nothing pinned for this view — back to the overview
+
+function placePopupValue(p,key){
+  if(key==="references")return normalizePlaceReferences(p.references);
+  return p[key] || "";
 }
+function placePopupOptions(){
+  var el=document.getElementById("placesMap");
+  var width=el.clientWidth||320,height=el.clientHeight||420;
+  return {minWidth:Math.min(250,Math.max(160,width-70)),maxWidth:Math.min(340,Math.max(160,width-70)),
+    className:"place-rich-popup",keepInView:true,autoPanPadding:[20,20]};
+}
+function updatePlacePopupSizing(){
+  var el=document.getElementById("placesMap");if(!el)return;
+  var height=el.clientHeight||420;
+  var sizeKey=(el.clientWidth||320)+"x"+height;
+  if(sizeKey===_placePopupSizeKey)return;
+  _placePopupSizeKey=sizeKey;
+  el.style.setProperty("--place-popup-max",Math.max(190,height-64)+"px");
+  el.style.setProperty("--place-popup-body-max",Math.max(100,height-190)+"px");
+  Object.keys(_placeMarkerEntries).forEach(function(id){
+    var popup=_placeMarkerEntries[id].marker.getPopup();
+    L.setOptions(popup,placePopupOptions());
+    if(_placeMarkerEntries[id].marker.isPopupOpen())popup.update();
+  });
+}
+function togglePlacesMapSize(button){
+  var el=document.getElementById("placesMap");
+  _placesMapExpanded=!_placesMapExpanded;
+  el.classList.toggle("expanded",_placesMapExpanded);
+  button.textContent=_placesMapExpanded?"Standard map":"Expand map";
+  button.setAttribute("aria-expanded",String(_placesMapExpanded));
+  if(_placesMap)_placesMap.invalidateSize({pan:false});
+  updatePlacePopupSizing();
+}
+function setPlacesMapFeedback(message){
+  var el=document.getElementById("placesMapStatus");if(el)el.textContent=message;
+}
+function popupSelect(name,label,value,options){
+  return '<label>'+esc(label)+'<select name="'+name+'">'+options.map(function(o){
+    return '<option value="'+esc(o.key)+'"'+(o.key===value?' selected':'')+'>'+esc(o.label)+'</option>';
+  }).join("")+'</select></label>';
+}
+function renderPlacePopupReferenceRow(r){
+  return renderReferenceEditorRow(r).replace('onclick="this.parentNode.remove()"','onclick="removePlacePopupReference(this)"');
+}
+function renderPlacePopup(p){
+  var pt=parseSimpleTime(p.time)||{h:"--",m:"00",ap:"AM"};
+  var minutes=MINUTES.slice();if(minutes.indexOf(pt.m)<0)minutes.push(pt.m);minutes.sort();
+  var days=[{key:"",label:"No day"}].concat(STATE.days.map(function(d){return {key:d.date,label:shortDayLabel(d.date)};}));
+  if(p.date&&!days.some(function(d){return d.key===p.date;}))days.push({key:p.date,label:p.date});
+  var refs=normalizePlaceReferences(p.references);
+  var maps=safeReferenceUrl(p.mapsUrl);
+  return '<div class="place-map-popup"><div class="place-popup-heading"><strong>'+esc(p.label)+'</strong>'+
+    (maps?'<a href="'+esc(maps)+'" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>':"")+'</div>'+
+    '<form class="place-popup-form" data-place-id="'+esc(p.id)+'" onsubmit="event.preventDefault();savePlacePopup(this)" oninput="markPlacePopupDirty(this)" onchange="markPlacePopupDirty(this)">'+
+    '<div class="place-popup-body" role="region" aria-label="Place details" tabindex="0">'+
+    (p.address?'<p class="place-popup-address">'+esc(p.address)+'</p>':"")+
+    (refs.length?'<div class="place-popup-links">'+refs.map(function(r){return '<div><a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">'+esc(r.label)+'</a>'+(r.creator?' <span>'+esc(r.creator)+'</span>':"")+'</div>';}).join("")+'</div>':"")+
+    '<div class="place-popup-grid">'+
+      popupSelect("tier","Preference",p.tier||"pass",TIERS)+
+      popupSelect("category","Personal / Conference",p.category||"personal",[{key:"personal",label:"Personal"},{key:"conference",label:"Conference"}])+
+      popupSelect("date","Trip day",p.date||"",days)+
+      popupSelect("ptype","Place type",p.ptype||"",[{key:"",label:"No type"}].concat(PLACE_TYPES))+
+    '</div><fieldset class="place-popup-time"><legend>Time</legend>'+
+      popupSelect("hour","Hour",pt.h,HOURS.map(function(x){return {key:x,label:x};}))+
+      popupSelect("minute","Minute",pt.m,minutes.map(function(x){return {key:x,label:x};}))+
+      popupSelect("ampm","AM / PM",pt.ap,AMPM.map(function(x){return {key:x,label:x};}))+
+    '</fieldset>'+
+    (p.notes?'<details class="place-popup-notes"><summary>Notes</summary><div class="place-notes-text">'+esc(p.notes)+'</div></details>':"")+
+    '<details class="place-popup-advanced"><summary>Edit name, address, notes &amp; links</summary>'+
+    '<label>Name<input name="label" value="'+esc(p.label)+'"></label>'+
+
+      '<label>Street address<input name="address" value="'+esc(p.address||"")+'"></label>'+
+      '<label>Notes<textarea name="notes" rows="5">'+esc(p.notes||"")+'</textarea></label>'+
+      '<div class="place-popup-references">'+refs.map(renderPlacePopupReferenceRow).join("")+'</div>'+
+      '<button type="button" onclick="addPlacePopupReference(this)">Add reference</button>'+
+    '</details></div>'+
+    '<div class="place-popup-footer"><div><button type="submit">Save changes</button> <button type="button" onclick="closePlacePopup(this)">Close</button></div>'+
+      '<div class="place-popup-status" role="status" aria-live="polite"></div></div></form></div>';
+}
+function placePopupElement(p){
+  var holder=document.createElement("div");holder.innerHTML=renderPlacePopup(p);return holder.firstElementChild;
+}
+function markPlacePopupDirty(node){
+  var form=node.closest("form"),entry=form&&_placeMarkerEntries[form.dataset.placeId];
+  if(entry){entry.dirty=true;form.querySelector(".place-popup-status").textContent="Unsaved changes";}
+}
+function addPlacePopupReference(button){
+  var form=button.closest("form");
+  form.querySelector(".place-popup-references").insertAdjacentHTML("beforeend",renderPlacePopupReferenceRow({}));
+  markPlacePopupDirty(form);
+}
+function removePlacePopupReference(button){var form=button.closest("form");button.parentNode.remove();markPlacePopupDirty(form);}
+function closePlacePopup(button){
+  var entry=_placeMarkerEntries[button.closest("form").dataset.placeId];if(entry)entry.marker.closePopup();
+}
+function savePlacePopup(form){
+  if(_staleBlocked)return;
+  var id=form.dataset.placeId,p=STATE.places.find(function(x){return x.id===id;}),entry=_placeMarkerEntries[id];
+  var status=form.querySelector(".place-popup-status");
+  if(!p||!entry){status.textContent="This place is no longer available in this view.";return;}
+  function val(name){return form.elements.namedItem(name).value.trim();}
+  var refs=[],invalid=false;
+  form.querySelectorAll(".place-reference-edit").forEach(function(row){
+    var inputs=row.querySelectorAll("input"),label=inputs[0].value.trim(),raw=inputs[1].value.trim(),creator=inputs[2].value.trim();
+    if(!label&&!raw&&!creator)return;
+    var url=safeReferenceUrl(raw);if(!url){invalid=true;return;}
+    refs.push({label:label||"Reference",url:url,creator:creator});
+  });
+  if(invalid){status.textContent="Every reference needs a complete HTTP(S) URL.";return;}
+  var candidate={label:val("label"),tier:val("tier"),category:val("category"),date:val("date"),ptype:val("ptype"),
+    time:val("hour")==="--"?"":val("hour")+":"+val("minute")+" "+val("ampm"),
+    address:val("address"),notes:val("notes"),references:refs};
+  if(!candidate.label){status.textContent="Enter a place name.";return;}
+  if(!TIERS.some(function(t){return t.key===candidate.tier;})||
+     !["personal","conference"].includes(candidate.category)||
+     !HOURS.includes(val("hour"))||!AMPM.includes(val("ampm"))||!/^\d{2}$/.test(val("minute"))||+val("minute")>59||
+     (candidate.date&&!STATE.days.some(function(d){return d.date===candidate.date;})&&candidate.date!==(entry.base.date||""))||
+     (candidate.ptype&&!PLACE_TYPES.some(function(t){return t.key===candidate.ptype;}))){
+    status.textContent="Choose a valid preference, category, day, type and time.";return;
+  }
+  var changed=Object.keys(candidate).filter(function(k){return JSON.stringify(candidate[k])!==JSON.stringify(placePopupValue(entry.base,k));});
+  var conflicts=changed.filter(function(k){
+    return JSON.stringify(placePopupValue(p,k))!==JSON.stringify(placePopupValue(entry.base,k))&&
+      JSON.stringify(placePopupValue(p,k))!==JSON.stringify(candidate[k]);
+  });
+  if(conflicts.length){status.textContent="Changed elsewhere: "+conflicts.map(function(k){return {label:"name",tier:"preference",category:"Personal / Conference",date:"trip day",ptype:"place type",time:"time",address:"address",notes:"notes",references:"links"}[k];}).join(", ")+". Close and reopen this pin to review the latest values.";return;}
+  if(!changed.length){status.textContent="No changes to save.";return;}
+  var addressChanged=changed.indexOf("address")>=0;
+  changed.forEach(function(k){p[k]=candidate[k];});
+  if(addressChanged){p.lat=null;p.lng=null;p.mapsUrl=buildMapsSearchUrl(p.address||p.label);}
+  entry.dirty=false;
+  var remainsVisible=placesForView().some(function(x){return x.id===id;});
+  setPlacesMapFeedback(addressChanged?"Saved. Updating the address pin…":remainsVisible?"Saved.":"Saved. This place is outside the current day, category or type filters. Use All days or change the filters to find it.");
+  persist();
+  if(addressChanged&&p.address){
+    var address=p.address;
+    geocodeWithFallback(address).then(function(found){
+      var current=STATE.places.find(function(x){return x.id===id;});
+      if(!current||current.address!==address)return;
+      if(found){current.lat=found.lat;current.lng=found.lng;persist();setPlacesMapFeedback("Saved. Address pin updated.");}
+      else setPlacesMapFeedback("Saved. The address could not be pinned; the place remains in the list.");
+    });
+  }else if(addressChanged)setPlacesMapFeedback("Saved. Add a street address to place this item on the map again.");
+}
+function refreshPlacePopup(entry,p){
+  var popup=entry.marker.getPopup(),el=popup.getElement();
+  var scroll=el&&el.querySelector(".place-popup-body")?el.querySelector(".place-popup-body").scrollTop:0;
+  entry.base=JSON.parse(JSON.stringify(p));entry.dirty=false;
+  entry.marker.setPopupContent(placePopupElement(p));
+  var next=popup.getElement();if(next&&next.querySelector(".place-popup-body"))next.querySelector(".place-popup-body").scrollTop=scroll;
+}
+function updatePlaceMarkers(){
+  if(!_placesMap||!_placesMarkersLayer)return;
+  var visible=placesForView().filter(function(p){return typeof p.lat==="number"&&typeof p.lng==="number"&&isFinite(p.lat)&&isFinite(p.lng);});
+  var ids=new Set(visible.map(function(p){return p.id;}));
+  Object.keys(_placeMarkerEntries).forEach(function(id){
+    if(!ids.has(id)){_placesMarkersLayer.removeLayer(_placeMarkerEntries[id].marker);delete _placeMarkerEntries[id];}
+  });
+  visible.forEach(function(p){
+    var entry=_placeMarkerEntries[p.id],modelKey=JSON.stringify(p),iconKey=JSON.stringify([p.tier,p.time,_colorMode]);
+    if(!entry){
+      var marker=L.marker([p.lat,p.lng],{icon:placeMarkerIcon(p),title:p.label,alt:p.label})
+        .bindPopup(placePopupElement(p),placePopupOptions()).addTo(_placesMarkersLayer);
+      entry={marker:marker,modelKey:modelKey,iconKey:iconKey,base:JSON.parse(JSON.stringify(p)),dirty:false};
+      _placeMarkerEntries[p.id]=entry;
+      marker.on("popupopen",function(){
+        var current=STATE.places.find(function(x){return x.id===p.id;});
+        if(current){refreshPlacePopup(entry,current);entry.modelKey=JSON.stringify(current);}
+        var el=marker.getPopup().getElement();
+        if(el){L.DomEvent.disableClickPropagation(el);L.DomEvent.disableScrollPropagation(el);}
+        updatePlacePopupSizing();
+      });
+      marker.on("popupclose",function(){entry.dirty=false;});
+    }else{
+      var pos=entry.marker.getLatLng();
+      if(pos.lat!==p.lat||pos.lng!==p.lng)entry.marker.setLatLng([p.lat,p.lng]);
+      if(entry.iconKey!==iconKey){entry.marker.setIcon(placeMarkerIcon(p));entry.iconKey=iconKey;}
+      var markerEl=entry.marker.getElement();if(markerEl){markerEl.title=p.label;markerEl.alt=p.label;}
+      if(entry.modelKey!==modelKey){
+        if(entry.marker.isPopupOpen()&&entry.dirty){
+          var el=entry.marker.getPopup().getElement();
+          if(el)el.querySelector(".place-popup-status").textContent="This place was updated. Your unsaved edits are retained.";
+        }else refreshPlacePopup(entry,p);
+        entry.modelKey=modelKey;
+      }
+    }
+  });
+  updatePlacePopupSizing();
+  var key=JSON.stringify([_selectedPlacesDate,_selectedCategory,_selectedPtype,visible.map(function(p){return [p.id,p.lat,p.lng];}).sort(function(a,b){return String(a[0]).localeCompare(String(b[0]));})]);
+  if(key!==_placesMapViewKey){
+    _placesMapViewKey=key;
+    var points=visible.map(function(p){return [p.lat,p.lng];});
+    if(points.length===1)_placesMap.setView(points[0],14);
+    else if(points.length>1)_placesMap.fitBounds(points,{padding:[30,30]});
+    else _placesMap.setView([37.7749,-122.4194],11);
+  }
+}
+
+
 function renderPlacesDayBar(){
   var today = todayStr();
   if(_selectedPlacesDate === null){
